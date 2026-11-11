@@ -1,0 +1,26 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90mE:/projecte/OpenMausBot[39m
+
+stderr | file:\E:\projecte\OpenMausBot\node_modules\.pnpm\vitest@4.1.11_@types+node@2_e1863e8544b106673873d37d7ac717f9\node_modules\vitest\dist\runners.js:19:9
+Importing from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+ [32m✓[39m src/lib/i18n.test.ts [2m([22m[2m36 tests[22m[2m)[22m[33m 6039[2mms[22m[39m
+     [33m[2m✓[22m[39m every registered pack carries only known keys with non-empty values [33m 5570[2mms[22m[39m
+stderr | file:\E:\projecte\OpenMausBot\node_modules\.pnpm\vitest@4.1.11_@types+node@2_e1863e8544b106673873d37d7ac717f9\node_modules\vitest\dist\runners.js:19:9
+Importing from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+ [32m✓[39m server/incus-transport.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 298[2mms[22m[39m
+stderr | file:\E:\projecte\OpenMausBot\node_modules\.pnpm\vitest@4.1.11_@types+node@2_e1863e8544b106673873d37d7ac717f9\node_modules\vitest\dist\runners.js:19:9
+Importing from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+ [32m✓[39m server/proxy-paths.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 255[2mms[22m[39m
+stderr | file:\E:\projecte\OpenMausBot\node_modules\.pnpm\vitest@4.1.11_@types+node@2_e1863e8544b106673873d37d7ac717f9\node_modules\vitest\dist\runners.js:19:9
+Importing from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+ [32m✓[39m server/incus-computer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m61 passed[39m[22m[90m (61)[39m
+[2m   Start at [22m 12:15:19
+[2m   Duration [22m 11.99s[2m (transform 1.65s, setup 2.90s, import 628ms, tests 6.62s, environment 1ms)[22m
+

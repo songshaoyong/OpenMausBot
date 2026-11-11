@@ -1,0 +1,49 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90mE:/projecte/OpenMausBot[39m
+
+[90mstderr[2m | file:\E:\projecte\OpenMausBot\node_modules\vitest\dist\runners.js:19:9
+[22m[39mImporting from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+[90mstderr[2m | src/components/ComputerPanel.takeover.test.ts
+[22m[39mWarning: KaTeX doesn't work in quirks mode. Make sure your website has a suitable doctype.
+
+ [32m✓[39m src/components/ComputerPanel.takeover.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 19473[2mms[22m[39m
+     [33m[2m✓[22m[39m turns the panel's own picture into the live desktop at once; no window or tab opens [33m 776[2mms[22m[39m
+     [33m[2m✓[22m[39m hands back at once and returns to watching [33m 1096[2mms[22m[39m
+     [33m[2m✓[22m[39m Full screen only watches: the bot keeps working until the person takes control from there [33m 1888[2mms[22m[39m
+     [33m[2m✓[22m[39m full screen shows only errors from a Take control tried there, and leaves Escape to a dialog opened over it [33m 1565[2mms[22m[39m
+     [33m[2m✓[22m[39m a refused Take control in full screen keeps watching and says why [33m 1499[2mms[22m[39m
+     [33m[2m✓[22m[39m full screen keeps Tab inside and gives focus back to Full screen when it closes [33m 1112[2mms[22m[39m
+     [33m[2m✓[22m[39m closing the panel, leaving its Screen view or closing the page gives back the hold it took [33m 2867[2mms[22m[39m
+     [33m[2m✓[22m[39m never gives back a hold another device has [33m 775[2mms[22m[39m
+     [33m[2m✓[22m[39m a hand-back from elsewhere ends the live view once it lasts, and a flicker does not [33m 4847[2mms[22m[39m
+     [33m[2m✓[22m[39m a desktop that never comes up gives the computer back and says so [33m 1145[2mms[22m[39m
+     [33m[2m✓[22m[39m a VPS is driven in place too, and handing back closes its viewer tunnel [33m 1137[2mms[22m[39m
+     [33m[2m✓[22m[39m a cloud computer's provider-hosted desktop still opens in the app's own viewer window [33m 760[2mms[22m[39m
+[90mstderr[2m | file:\E:\projecte\OpenMausBot\node_modules\vitest\dist\runners.js:19:9
+[22m[39mImporting from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+ [32m✓[39m server/incus-computer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+[90mstderr[2m | file:\E:\projecte\OpenMausBot\node_modules\vitest\dist\runners.js:19:9
+[22m[39mImporting from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+[90mstderr[2m | src/components/ComputerPanel.live.test.ts
+[22m[39mWarning: KaTeX doesn't work in quirks mode. Make sure your website has a suitable doctype.
+
+[90mstderr[2m | src/components/ComputerPanel.live.test.ts
+[22m[39mAn empty string ("") was passed to the src attribute. This may cause the browser to download the whole page again over the network. To fix this, either do not render the element at all or pass null to src instead of an empty string.
+
+GET http://localhost:3000/api/auth/session 404 (Not Found)
+GET http://localhost:3000/api/auth/session 404 (Not Found)
+GET http://localhost:3000/api/auth/session 404 (Not Found)
+ [32m✓[39m src/components/ComputerPanel.live.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 260[2mms[22m[39m
+[90mstderr[2m | file:\E:\projecte\OpenMausBot\node_modules\vitest\dist\runners.js:19:9
+[22m[39mImporting from "vitest/runners" is deprecated since Vitest 4.1. Please use "vitest" instead.
+
+ [32m✓[39m src/components/ComputerPanel.i18n.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 133[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m35 passed[39m[22m[90m (35)[39m
+[2m   Start at [22m 16:56:58
+[2m   Duration [22m 33.54s[2m (transform 3.97s, setup 2.96s, import 4.41s, tests 19.89s, environment 1.44s)[22m
+

@@ -186,6 +186,45 @@ Desktop-only for now (needs the Mac/Linux app):
 
 - dictation/voice, controlling the host desktop
 
+### Incus computers
+
+A bot's computer can also be an OCI container on your own
+[Incus](https://linuxcontainers.org/incus/) server. The harness reaches it over
+the Incus HTTPS API with a client certificate, so the image needs no `incus`
+CLI and mounts no daemon socket.
+
+Requirements:
+
+- Incus 6.11 or newer, for OCI image sources.
+- An API address the container can reach: `incus config set core.https_address :8443`.
+  A Docker-hosted server uses `https://host.docker.internal:8443`.
+- A client certificate the server trusts:
+  `incus config trust add-certificate openmausbot.crt --name openmausbot`.
+
+Paste the address, the client certificate and key, and the server's own
+certificate in **Settings → Computers → Incus**. A self-signed Incus
+certificate is not in the system trust store, so it is required there and is
+then pinned exactly; the card also lists every computer the server holds and
+removes one that a deleted bot left behind.
+
+A bot's instance needs an image with the Cua desktop and its driver on the
+default socket. Set **Desktop image** to a registry reference
+(`docker.io/trycua/xfce-cua@sha256:…`) or, when that registry is not reachable
+from the server, to the alias of an image built on the server itself:
+
+```sh
+sudo bash scripts/incus-desktop-image.sh   # publishes the alias openmausbot-desktop
+```
+
+`scripts/setup-incus.sh` does the install, initialization, certificate and
+`core.https_address` in one step. It also accepts the Incus bridge in
+`DOCKER-USER`: Docker sets the forwarded-traffic policy to `DROP`, so without
+that rule a bot's desktop has no network at all.
+A bot then chooses **Cloud → Incus** on its Works on row and gets one instance
+named `openmausbot-incus-<digest>` running the Cua XFCE desktop, capped by the
+instance's own `limits.*`. The Computer panel shows screen previews; there is no
+browser desktop viewer yet, so drive it through the bot's computer tools.
+
 ## Ways in, in detail
 
 `npx openmausbot start` (or plain `npx openmausbot`) is the guided start. It

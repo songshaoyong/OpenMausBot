@@ -534,6 +534,40 @@ export function ComputerPanel({
         alive = false;
       };
     }
+    if (cloudBackend === "incus") {
+      (async () => {
+        type IncusPanelStatus = { configured?: boolean; ready?: boolean; state?: string; problem?: string | null };
+        try {
+          let status = (await api(threadPath("computer"))) as IncusPanelStatus;
+          if (!alive) return;
+          setResolvedComputerSelection({ botId: bot.id, threadId: bot.threadId, computer: bot.computer, cloudBackend });
+          if (!status.configured) {
+            setError(new LocalizedPanelError("computer.err.incusConfig"));
+            setPhase("error");
+            return;
+          }
+          if (!status.ready && canManageCloud && (status.state === "missing" || status.state === "stopped")) {
+            setPhase("starting");
+            await api(`/api/bots/${bot.id}/computer/provision`, { method: "POST" });
+            status = (await api(threadPath("computer"))) as IncusPanelStatus;
+            if (!alive) return;
+          }
+          if (status.ready) {
+            setPhase("ready");
+            return;
+          }
+          setError(status.problem ?? new LocalizedPanelError("computer.err.incusNotReady"));
+          setPhase("error");
+        } catch (e) {
+          if (!alive) return;
+          setError(e instanceof Error ? e : String(e));
+          setPhase("error");
+        }
+      })();
+      return () => {
+        alive = false;
+      };
+    }
     // Opening the panel only looks: it never creates or wakes a Boat.
     api(threadPath("computer"))
       .then((status) => {
@@ -863,6 +897,16 @@ export function ComputerPanel({
   );
 
   const openDesktop = async () => {
+    if (cloudBackend === "incus") {
+      const viewer = state.config?.incus?.viewerUrl?.trim();
+      if (viewer) {
+        setError(null);
+        window.open(viewer, "_blank", "noopener,noreferrer");
+        return;
+      }
+      setError(new LocalizedPanelError("computer.err.incusNoViewer"));
+      return;
+    }
     const controller = new AbortController();
     desktopJoin.current = controller;
     const ownsConnection = () => !controller.signal.aborted && viewerConnection.current === viewerConnectionKey;

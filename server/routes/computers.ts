@@ -23,6 +23,7 @@ import type { RoutineManager } from "../routines.ts";
 import type { SessionRegistry } from "../sessions.ts";
 import { sectionKey, type BotRecord, type Store } from "../store.ts";
 import { teamComputerAssignment, teamComputerCreate, teamComputerOwner, type TeamComputerRecord, type TeamComputers } from "../team-computers.ts";
+import * as incus from "../incus-computer.ts";
 import * as vps from "../vps-computer.ts";
 import { vpsAliasesInPlay } from "../vps-hosts.ts";
 import type { BusyFlag, RemoteComputerProvider } from "./config.ts";
@@ -275,6 +276,28 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
       } finally {
         releaseComputerLifecycle();
       }
+    }
+
+    if (method === "GET" && path === "/api/computers/incus") {
+      res.setHeader("cache-control", "private, no-store");
+      return json(res, 200, await incus.incusListManagedComputers(incus.incusSettings(cfg)));
+    }
+    m = path.match(/^\/api\/computers\/incus\/([\w-]+)\/remove$/);
+    if (m && method === "POST") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      if (computerProviderConfigTransitions.has("incus")) {
+        return json(res, 409, { error: providerTransitionMessage("incus") });
+      }
+      if (typeof body?.confirmName !== "string" || body.confirmName !== m[1]) {
+        return json(res, 400, { error: "confirmName must be the Incus computer name shown in Settings" });
+      }
+      const settings = incus.incusSettings(cfg);
+      if (!settings) return json(res, 409, { error: "Configure the Incus server in Settings before removing a computer" });
+      await incus.incusRemoveComputer(settings, m[1]);
+      return json(res, 200, { removed: m[1] });
     }
 
     if (method === "GET" && path === "/api/local-computer") {

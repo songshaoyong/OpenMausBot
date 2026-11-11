@@ -197,6 +197,10 @@ against an isolated server for image decoding, loading, and recovery UI checks.
 The [VPS recovery fixtures](vps-recovery.md) reproduce preview/startup contention
 and Docker-over-SSH timeout cleanup without contacting a real server.
 
+The [Incus computers recipe](incus-computer.md) proves the HTTPS client-certificate
+transport and the provider against a real websocket server, and lists the
+acceptance steps that need a live Incus server.
+
 The [live browser fixture](browser-live.md) mounts the real Browser panel with
 an explicitly selected native engine and Chrome in a disposable home, covering
 watching, takeover, input, and profile switching.

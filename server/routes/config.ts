@@ -50,7 +50,7 @@ export interface BusyFlag {
   set(busy: boolean): void;
 }
 
-export type RemoteComputerProvider = "box" | "vps";
+export type RemoteComputerProvider = "box" | "vps" | "incus";
 
 export type ModelSelectionCheck = { ok: true; selection: ModelSelection } | ({ ok: false; status: number } & ServerErrorBody);
 
@@ -237,9 +237,15 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
         ? currentVpsAlias
         : vpsSshAlias({ ...cfg, vps: patch.vps });
       const changingVpsAlias = patch.vps !== undefined && nextVpsAlias !== currentVpsAlias;
+      const changingIncusConnection = patch.incus !== undefined && (
+        (patch.incus.url !== undefined && patch.incus.url !== (cfg.incus?.url ?? "")) ||
+        (patch.incus.clientCert !== undefined && patch.incus.clientCert !== (cfg.incus?.clientCert ?? "")) ||
+        (patch.incus.clientKey !== undefined && patch.incus.clientKey !== (cfg.incus?.clientKey ?? ""))
+      );
       const transitioningProviders: RemoteComputerProvider[] = [
         ...(changingBoatToken ? ["box" as const] : []),
         ...(changingVpsAlias ? ["vps" as const] : []),
+        ...(changingIncusConnection ? ["incus" as const] : []),
       ];
       providerConfigBusy.set(true);
       const changingLocalVmMode = patch.localVm?.mode !== undefined && patch.localVm.mode !== localVmMode(cfg);

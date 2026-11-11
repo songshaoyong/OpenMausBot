@@ -71,6 +71,34 @@ export function normalizeVpsConfig(raw: unknown): { sshAlias?: string } {
 const vpsConfigSchema = z.object({
   sshAlias: z.string().refine((value) => value === "" || isValidSshAlias(value), { message: "must be a simple SSH config alias" }).optional(),
 });
+/** An Incus server reached over HTTPS with a client certificate; each bot's desktop is an OCI container there. */
+const incusConfigSchema = z
+  .object({
+    url: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((value) => !value || /^https:\/\//i.test(value), "the Incus API address must start with https://")
+      .optional(),
+    clientCert: z.string().max(16_000).optional(),
+    clientKey: z.string().max(16_000).optional(),
+    serverCert: z.string().max(16_000).optional(),
+    project: z.string().trim().max(63).optional(),
+    image: z.string().trim().max(512).optional(),
+    viewerUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((value) => !value || /^https?:\/\//i.test(value), "the viewer address must start with http:// or https://")
+      .optional(),
+    cuaExecutable: z.string().trim().max(512).optional(),
+    cuaSocket: z.string().trim().max(512).optional(),
+    uid: z.number().int().min(0).max(65_535).optional(),
+    cpus: z.number().int().min(1).max(32).optional(),
+    memory: z.string().trim().regex(/^\d+(MiB|GiB)$/, "memory must look like 4GiB or 512MiB").optional(),
+    processes: z.number().int().min(128).max(65_536).optional(),
+  })
+  .strict();
 const roomConfigSchema = z.object({
   turnTimeoutMinutes: z
     .number()
@@ -380,6 +408,7 @@ const appConfigSchema = z.object({
   composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
   box: z.object({ token: optionalText }).optional(),
   vps: vpsConfigSchema.optional(),
+  incus: incusConfigSchema.optional(),
   /** OpenCode key, plus `providerKeys` for its other providers by the env name OpenCode reads; both write-only and only for its child. */
   opencodeGo: z.object({ apiKey: optionalText, providerKeys: z.record(z.string(), z.string()).optional() }).optional(),
   /** `provider`: "elevenlabs" (default, `key`), "fish" (`fishKey`, `fishModel`), "system", "xai" (`xai.key`), "gemini" (`geminiKey`, `model`), "openai" (`openai.key`) or "chatterbox" (local; `baseUrl`, `model`). */
@@ -488,6 +517,23 @@ export interface AppConfig extends HelperConfig {
   box?: { token?: string };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
   vps?: { sshAlias?: string };
+  /** An Incus API reached over HTTPS; the certificate pair is the whole credential. */
+  incus?: {
+    url?: string;
+    clientCert?: string;
+    clientKey?: string;
+    serverCert?: string;
+    project?: string;
+    image?: string;
+    /** A noVNC page that can drive this server's desktops; the screen panel opens it for "take control". */
+    viewerUrl?: string;
+    cuaExecutable?: string;
+    cuaSocket?: string;
+    uid?: number;
+    cpus?: number;
+    memory?: string;
+    processes?: number;
+  };
   opencodeGo?: { apiKey?: string; providerKeys?: Record<string, string> };
   tts?: { key?: string; fishKey?: string; geminiKey?: string; voice?: string; provider?: "elevenlabs" | "fish" | "system" | "chatterbox" | "xai" | "gemini" | "openai"; baseUrl?: string; model?: string; fishModel?: FishTtsModel; everyReply?: boolean };
   decider?: DeciderConfig;
@@ -930,7 +976,7 @@ export function saveConfig(
   const keepImageModels = keepKeysOutOfImageModels(disk, checkedPatch.imageGen);
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
-  for (const key of ["xai", "anthropic", "mistral", "cerebras", "treg", "postiz", "groq", "greenference", "meta", "deepseek", "openai", "openrouter", "openaiCompat", "composio", "box", "opencodeGo", "tts", "decider", "imageGen", "live", "profile", "rooms", "mcp", "threads", "context", "memory", "localVm", "features", "budgets", "billing", "decisions", "loopGuard", "onboarding", "browserEngine", "newBots", "safetyFloor"] as const) {
+  for (const key of ["xai", "anthropic", "mistral", "cerebras", "treg", "postiz", "groq", "greenference", "meta", "deepseek", "openai", "openrouter", "openaiCompat", "composio", "box", "incus", "opencodeGo", "tts", "decider", "imageGen", "live", "profile", "rooms", "mcp", "threads", "context", "memory", "localVm", "features", "budgets", "billing", "decisions", "loopGuard", "onboarding", "browserEngine", "newBots", "safetyFloor"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

@@ -434,6 +434,7 @@ import { createLoopGuard, loopGuardSettings } from "./host/loop-guard.ts"; impor
 import { claudeUserSkillsEnabled, settingsTurnFields } from "./turn-settings.ts";
 import { addHeldSecretScrubber, redactSecretsInText, scrubHeldSecrets } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
+import * as incus from "./incus-computer.ts";
 import { vpsConfigForBot, vpsSshAliasForBot } from "./vps-hosts.ts";
 import { ROUTINE_RESTARTED, RoutineManager, type Routine, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts"; import { routineModelRefusal, routineThreadModel, type RoutineModelChecks } from "./routine-input.ts"; import { routineRunsFor } from "./routine-run-window.ts"; import { batchSaves } from "./save-batch.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
@@ -1874,7 +1875,7 @@ function clearFailedAutoPin(botId: string, threadId: string, place: Surface): bo
 }
 
 async function asPlaceFailure(
-  error: unknown, place: Surface, source: PlaceSource, bot: { id: string; name: string }, backend: "box" | "vps" = "box",
+  error: unknown, place: Surface, source: PlaceSource, bot: { id: string; name: string }, backend: "box" | "vps" | "incus" = "box",
 ): Promise<unknown> {
   if (error instanceof DirectTurnSetupCancelled || error instanceof ComputerWaitParked || error instanceof PlaceUnavailableError) return error;
   const failure = error instanceof Error ? error : new Error(String(error));
@@ -2558,7 +2559,7 @@ async function moveOffComputerEngine(): Promise<void> {
   const moves = store.retireInstances(removed, replacement, {
     driverKind: instance?.driverKind,
     canWorkOnCloud: canWorkOnCloud(cloudEngine(instance)),
-    keepCloud: (bot) => boat.boatConfigured(cfg) && bot.cloudBackend !== "vps" && !inheritedTeamComputer(bot),
+    keepCloud: (bot) => boat.boatConfigured(cfg) && (bot.cloudBackend ?? "box") === "box" && !inheritedTeamComputer(bot),
   });
   writeComputerEngineMoveLines(moves, (move) => {
     const bot = store.bot(move.botId);
@@ -5653,7 +5654,7 @@ const computerPreviews = createComputerPreviews();
 const vpsJoinRequests = new Map<string, Promise<void>>();
 const orphanBoatLifecycleBusyIds = new Set<string>();
 const boatInventoryRequestsBusyIds = new Set<string>();
-type RemoteComputerProvider = "box" | "vps";
+type RemoteComputerProvider = "box" | "vps" | "incus";
 const computerProviderConfigTransitions = new Set<RemoteComputerProvider>();
 const localVmIdleMs = () => localVmIdleTimeoutMinutes(cfg) * 60_000;
 const LOCAL_VM_DESKTOP_WAIT_MS = 90_000;
@@ -5875,6 +5876,38 @@ async function mountBotVps(
   };
 }
 
+/** Started at dispatch, like the VPS: the bridge opens an exec into the instance before the engine first asks for a tool. */
+async function mountBotIncus(
+  bot: BotRecord,
+  owner: TurnOwner,
+  opts: { start: boolean; onClaimed: (capture: () => Promise<{ png: string; format: string }>) => void; onRejected?: (failure: string) => void },
+) {
+  const settings = incus.incusSettings(cfg);
+  if (!settings) return { problem: "Configure the Incus server in Settings first" };
+  let status = await incus.incusComputerStatus(settings, bot.id);
+  if (opts.start && !status.ready && (status.state === "missing" || status.state === "stopped")) {
+    await incus.incusComputerAction(settings, bot.id, "provision");
+    status = await incus.incusComputerStatus(settings, bot.id);
+  }
+  if (!status.ready) return { problem: status.problem ?? "the Incus computer is not ready" };
+  const resource = `computer:incus:${bot.id}`;
+  // Live frames only once this turn holds the desktop, or it would publish another turn's screen as its own.
+  const capture = () => incus.incusComputerFrame(settings, bot.id);
+  autoVmClaims.set(owner.threadId, {
+    owner,
+    lazy: true,
+    label: "the Incus computer",
+    onRejected: opts.onRejected,
+    claim: async () => {
+      await bindTurnComputer(owner, resource, true);
+      opts.onClaimed(capture);
+    },
+  });
+  return {
+    integration: incus.incusComputerMcp(settings, bot.id, controlIntegration(bot.id, owner.threadId, owner.generation)),
+  };
+}
+
 function mountBotBoat(
   bot: BotRecord,
   owner: TurnOwner,
@@ -5955,9 +5988,9 @@ function botHasActiveTurn(botId: string): boolean {
 }
 
 function providerTransitionMessage(provider: RemoteComputerProvider): string {
-  return provider === "box"
-    ? "Boat account settings are being updated — wait for them to finish"
-    : "VPS connection settings are being updated — wait for them to finish";
+  if (provider === "box") return "Boat account settings are being updated — wait for them to finish";
+  if (provider === "incus") return "Incus connection settings are being updated — wait for them to finish";
+  return "VPS connection settings are being updated — wait for them to finish";
 }
 
 function providerOperationConflict(provider: RemoteComputerProvider): string | null {
@@ -5965,7 +5998,7 @@ function providerOperationConflict(provider: RemoteComputerProvider): string | n
     return "stop the active VPS turn before changing the SSH config alias";
   }
   if (managedBoatOwners().some((owner) => owner.inUse)) {
-    return `stop active bot work and computer control before changing ${provider === "box" ? "the Boat account" : "the VPS connection"}`;
+    return `stop active bot work and computer control before changing ${provider === "box" ? "the Boat account" : provider === "incus" ? "the Incus connection" : "the VPS connection"}`;
   }
   if (boatLifecycleBusyBots.size > 0 || computerPreviews.size > 0) {
     return "wait for cloud computer actions to finish before changing provider settings";
@@ -6001,7 +6034,9 @@ function turnProvider(bot: BotRecord, runOn?: RoutineRunOn, threadId?: string): 
   if (runOn === "cloud" || inheritedTeamComputer(bot)) return "box";
   const wants = turnSurfacePlan(bot, runOn, threadId).computer;
   if (wants !== undefined && wants !== "cloud") return null;
-  return bot.cloudBackend === "vps" ? "vps" : wants === "cloud" ? "box" : null;
+  if (bot.cloudBackend === "vps") return "vps";
+  if (bot.cloudBackend === "incus") return "incus";
+  return wants === "cloud" ? "box" : null;
 }
 
 /** A query never grants lifecycle authority. */
@@ -6021,6 +6056,11 @@ async function computerPreviewSurface(bot: BotRecord, threadId?: string) {
     const remote = await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id);
     if (remote.ready || vpsDesktopOutdated(remote)) return "cloud";
   }
+  if (bot.cloudBackend === "incus") {
+    const settings = incus.incusSettings(cfg);
+    const remote = settings ? await incus.incusComputerStatus(settings, bot.id).catch(() => null) : null;
+    if (remote?.ready) return "cloud";
+  }
   const target = localVmTargetForStatus(bot.id, threadId);
   if (!CLOUD_HOME && instance?.adapter.capabilities.computerMcp && localVmSeen.has(target.key)) {
     const vm = await containerComputerStatus(undefined, undefined, target).catch(() => null);
@@ -6028,7 +6068,7 @@ async function computerPreviewSurface(bot: BotRecord, threadId?: string) {
   }
   if (!CLOUD_HOME && shouldMountLocalComputer({ requested: undefined, hostPlatform: process.platform,
     providerSupportsLocal: instance?.adapter.capabilities.localComputerMcp === true }) && desktopComputer.connection()) return "local";
-  if (bot.cloudBackend === "vps") return "cloud";
+  if (bot.cloudBackend === "vps" || bot.cloudBackend === "incus") return "cloud";
   return plan.browser ? "browser" : "off";
 }
 
@@ -6059,6 +6099,15 @@ async function selectableComputers(bot: BotRecord) {
           canCreate = Boolean(status?.configured && status.daemonUp && status.container === "missing");
           ownDesktopAwaitsUpdate ||= vpsDesktopOutdated(status);
           reason = status?.problem ? `${status.problem}${vpsDesktopOutdated(status) ? `. ${VPS_OUTDATED_HINT}` : ""}` : reason;
+        } else if (bot.cloudBackend === "incus") {
+          const settings = incus.incusSettings(cfg);
+          const status = settings && canWorkOnCloud(cloudEngine(instance))
+            ? await incus.incusComputerStatus(settings, bot.id)
+            : null;
+          ready = status?.ready === true;
+          canStart = status?.state === "stopped";
+          canCreate = status?.configured === true && status.state === "missing";
+          reason = status?.problem ?? reason;
         } else if (boat.boatConfigured(cfg) && canWorkOnCloud(cloudEngine(instance))) {
           const status = await boat.boatStatus(cfg, bot.id);
           const lifecycle = boat.boatTurnLifecycleAction(status.box?.state ?? null);
@@ -7949,7 +7998,9 @@ async function beginTurn(
       const dwebUrl = process.env.DWEB_URL?.trim();
       if (dwebUrl) integrations.dweb = { url: dwebUrl };
       let teamComputer = computerSkipped || proactive.fence.confines(threadId) || botApiThread(threadId) ? undefined : inheritedTeamComputer(bot);
-      const cloudBackend = teamComputer || opts?.runOn === "cloud" || bot.cloudBackend !== "vps" ? "box" : "vps";
+      const cloudBackend: "box" | "vps" | "incus" = teamComputer || opts?.runOn === "cloud" || !bot.cloudBackend
+        ? "box"
+        : bot.cloudBackend;
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
       const dispatchTask = store.taskByThread(bot.id, threadId);
@@ -8202,6 +8253,29 @@ async function beginTurn(
             autoVpsProblem = mounted.problem ?? "the VPS computer could not be reached";
             autoVpsReachable = mounted.reachable; autoVpsOutdated = "outdated" in mounted && mounted.outdated === true;
           }
+        }
+
+        if (cloudBackend === "incus" && (wants === "cloud" || wants === undefined) && canWorkOnCloud(cloudEngine(instance))) {
+          const mounted = await mountBotIncus(bot, resourceOwner, {
+            start: wants === "cloud" || bot.autoStartVps === true || Boolean(opts?.automationSource),
+            onClaimed: (incusCapture) => {
+              pinAutoSurface("cloud");
+              adoptClaimedCapture(incusCapture);
+            },
+            onRejected: surfaceLazyClaimRejection("the Incus computer"),
+          }).catch((error: unknown) => {
+            if (wants === "cloud") throw error;
+            return { problem: error instanceof Error ? error.message : String(error) };
+          });
+          if ("integration" in mounted) {
+            integrations.localComputer = mounted.integration;
+            computerKind = "box";
+          } else if (wants === "cloud") {
+            throw new Error(mounted.problem ?? "the Incus computer could not be created or reached");
+          }
+        }
+        if (wants === "cloud" && cloudBackend === "incus" && !integrations.localComputer) {
+          throw new Error("the Incus computer could not be created or reached");
         }
 
         if (teamComputer) {
@@ -11771,6 +11845,13 @@ function configStatus() {
     },
     box: { ...boat.describeBoatAccount(cfg), ...(boat.boatAccount(cfg)?.included ? {} : keyHint(cfg.box?.token)) },
     vps: { configured: Boolean(vpsSshAlias(cfg)), sshAlias: vpsSshAlias(cfg) ?? "" },
+    incus: {
+      configured: incus.incusConfigured(incus.incusSettings(cfg)),
+      url: cfg.incus?.url ?? "",
+      project: cfg.incus?.project || "default",
+      image: cfg.incus?.image ?? "",
+      viewerUrl: cfg.incus?.viewerUrl ?? "",
+    },
     opencodeGo: { ...keyStatus(cfg.opencodeGo?.apiKey), providerKeys: Object.keys(openCodeProviderKeys(cfg)) },
     tts: tts.describeVoice(cfg),
     decider: describeDecider(cfg), helpers: describeHelpers(cfg),
@@ -15220,9 +15301,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const bot = computerPreviewBot(m[1], url);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const surface = url.searchParams.has("threadId") ? await computerPreviewSurface(bot, bot.threadId) : "cloud";
-      if (surface !== "cloud") return json(res, 200, { surface, configured: false, backend: bot.cloudBackend === "vps" ? "vps" : "box" });
+      if (surface !== "cloud") return json(res, 200, { surface, configured: false, backend: bot.cloudBackend ?? "box" });
       const teamComputer = inheritedTeamComputer(bot);
       if (teamComputer) return json(res, 200, { surface, backend: "box", teamComputer: { id: teamComputer.id, name: teamComputer.name }, ...(await boat.boatStatus(cfg, teamComputerOwner(teamComputer.id))) });
+      if (bot.cloudBackend === "incus") {
+        const settings = incus.incusSettings(cfg);
+        return json(res, 200, {
+          surface,
+          backend: "incus",
+          ...(settings
+            ? await incus.incusComputerStatus(settings, bot.id)
+            : { configured: false, state: "missing", ready: false, problem: "Configure the Incus server in Settings first" }),
+        });
+      }
       return bot.cloudBackend === "vps"
         ? json(res, 200, { surface, backend: "vps", ...(await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id)) })
         : json(res, 200, { surface, backend: "box", ...(await boat.boatStatus(cfg, bot.id)) });
@@ -15303,7 +15394,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (m[2] === "join" && bot.cloudBackend === "vps") {
         for (let pending; (pending = vpsJoinRequests.get(botId));) await pending;
       }
-      const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps" ? "vps" : "box";
+      const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps" ? "vps" : bot.cloudBackend === "incus" ? "incus" : "box";
       if (computerProviderConfigTransitions.has(remoteProvider)) {
         return json(res, 409, { error: providerTransitionMessage(remoteProvider) });
       }
@@ -15327,6 +15418,29 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (m[2] === "join") return json(res, 200, await boat.joinReadyBoat(cfg, key));
           return json(res, 200, await boat.sleepBoat(cfg, key));
         } finally { release(); if (m[2] !== "sleep") cloudComputerPower.used(key); }
+      }
+      if (bot.cloudBackend === "incus") {
+        const settings = incus.incusSettings(cfg);
+        if (!settings) return json(res, 409, { error: "Configure the Incus server in Settings before using this computer" });
+        if (m[2] === "screenshot") {
+          res.setHeader("cache-control", "private, no-store");
+          return json(res, 200, await computerPreviews.capture(botId, () => incus.incusComputerFrame(settings, botId)));
+        }
+        if (m[2] === "join") return json(res, 409, { error: "This computer has no live viewer yet; watch the screen preview instead" });
+        if (m[2] === "exec") return json(res, 409, { error: "The console is available to the bot through its scoped computer tools" });
+        if ((m[2] === "sleep" || m[2] === "remove") && (bot.busy || activeVpsThreads.has(botId))) {
+          return json(res, 409, { error: "The Incus computer is being used by this bot — interrupt the turn first" });
+        }
+        if (m[2] === "provision" && bot.computer !== "cloud" && !bot.autoStartVps) {
+          return json(res, 409, { error: "Auto may start this Incus computer only after starting automatically is enabled" });
+        }
+        const releaseComputerLifecycle = claimBotComputerLifecycle(botId, false);
+        try {
+          const action = m[2] === "provision" ? "provision" : m[2] === "remove" ? "remove" : "stop";
+          return json(res, 200, await incus.incusComputerAction(settings, botId, action));
+        } finally {
+          releaseComputerLifecycle();
+        }
       }
       if (bot.cloudBackend === "vps") {
         if (m[2] === "screenshot") {

@@ -50,6 +50,8 @@ export interface ConfigStatus {
   /** `included`: cloud computers come with Cloud Pro, no key is saved. */
   box: SavedKey & { included?: boolean };
   vps: { configured: boolean; sshAlias: string };
+  /** An Incus server bots can run container desktops on; certificates are write-only. */
+  incus?: { configured: boolean; url: string; project: string; image: string; viewerUrl?: string };
   rooms: { turnTimeoutMinutes: number };
   /** Per-call ceiling (minutes) for a bot's MCP tools. Absent from servers
    * older than the setting; read it with mcpCallTimeoutMinutes(). */
