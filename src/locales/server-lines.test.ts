@@ -11,7 +11,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 import { describe, expect, it } from "vitest";
 
 import de from "./de.json";
@@ -380,12 +380,7 @@ const PENDING: Readonly<Record<string, ReadonlyArray<readonly [file: string, sni
     ["shared/plain-time-zone.ts", "every day"],
   ],
   "rooms and teammates": [
-    ["server/escalations.ts", "in the room \" … \""],
-    ["server/escalations.ts", "in its thread # …"],
-    ["server/escalations.ts", "in its main conversation"],
-    ["server/escalations.ts", "… 's work  …  is parked at a gate:  … ."],
     ["server/host/delegated-level.ts", "…  — handed on by  … ,  … a Chief of Staff on  …"],
-    ["server/peer-approval.ts", "@ …  wants to  …   …"],
     ["server/store.ts", "needs your input"],
     ["server/store.ts", "reached its turn limit"],
   ],

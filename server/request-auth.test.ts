@@ -106,6 +106,37 @@ describe("scopes", () => {
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
   });
 
+  it("lets a client read a bot's Data and nothing that runs, changes or exports it", () => {
+    for (const [method, path] of [
+      ["GET", "/api/bots/bot-1/data"],
+      ["POST", "/api/bots/bot-1/data/page"],
+      ["GET", "/api/bots/bot-1/data/cards/c_12/image"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
+    for (const [method, path] of [
+      ["POST", "/api/bots/bot-1/data/run"],
+      ["POST", "/api/bots/bot-1/data/cancel"],
+      ["POST", "/api/bots/bot-1/data/export"],
+      ["PATCH", "/api/bots/bot-1/data/cards/c_12"],
+      ["DELETE", "/api/bots/bot-1/data/cards/c_12"],
+      ["GET", "/api/bots/bot-1/data/tables/orders/stats"],
+      ["GET", "/api/bots/bot-1/data/tables/orders/histogram"],
+      ["POST", "/api/bots/bot-1/data"],
+      ["GET", "/api/bots/bot-1/data/page"],
+      ["POST", "/api/bots/bot-1/data/cards/c_12/image"],
+      ["GET", "/api/bots/bot-1/data/cards/x/image"],
+      ["GET", "/api/bots/bot-1/data/cards/c_12/image/extra"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
+  });
+
+  it("keeps a card's \"Use a saved one\" an admin's, since picking one lets a bot use a Vault item", () => {
+    for (const [method, path] of [
+      ["GET", "/api/bots/bot-1/secret-cards/card-1/saved"],
+      ["POST", "/api/bots/bot-1/secret-cards/card-1/use"],
+      ["GET", "/api/bots/bot-1/sign-in-cards/card-1/saved-logins"],
+      ["POST", "/api/bots/bot-1/sign-in-cards/card-1/use-login"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
+  });
+
   it("keeps the attachments clear to the owner: a client may read one file, never empty the store", () => {
     for (const method of ["GET", "POST"]) expect(requiredScope(method, "/api/attachment-storage"), method).toBe("admin");
     expect(requiredScope("GET", "/api/attachments/a1b2.png")).toBe("client");
@@ -156,7 +187,7 @@ describe("scopes", () => {
       ["POST", "/api/webhooks"], ["POST", "/api/webhooks/w/rotate"], ["POST", "/api/bots/x/skills"], ["PATCH", "/api/bots/x/skills/s"],
       ["PATCH", "/api/bots/x/model"], ["PATCH", "/api/groups/g/setup"], ["POST", "/api/teams/import"], ["GET", "/api/teams/scout"],
       ["POST", "/api/team-library/github"], ["GET", "/api/setup-import/grok"],
-      ["GET", "/api/bots/x/memory"], ["PUT", "/api/bots/x/memory"], ["PUT", "/api/section-context"], ["GET", "/api/threads/t/events"],
+      ["GET", "/api/bots/x/memory"], ["PUT", "/api/bots/x/memory"], ["PUT", "/api/section-context"], ["PUT", "/api/groups/order"], ["GET", "/api/threads/t/events"],
       ["GET", "/api/mcp/servers"], ["POST", "/api/mcp/servers"], ["GET", "/api/bots/x/mcp-servers"], ["POST", "/api/connectors/slack/authorize"],
       ["POST", "/api/bots/x/slack-management"], ["GET", "/api/bots/x/slack-management/extra"],
       ["PUT", "/api/config"], ["POST", "/api/auth/pairing"], ["GET", "/api/auth/sessions"], ["DELETE", "/api/auth/sessions/abc"],
@@ -167,7 +198,7 @@ describe("scopes", () => {
       ["POST", "/api/bots/x/sign-in-cards/m/provide"], ["POST", "/api/browser-engine/install"],
       ["GET", "/api/logins"], ["POST", "/api/logins"], ["PATCH", "/api/logins/l1"], ["DELETE", "/api/logins/l1"],
       ["POST", "/api/logins/1password"], ["POST", "/api/logins/1password/refresh"], ["DELETE", "/api/logins/1password"],
-      ["GET", "/api/vault"], ["POST", "/api/vault/secrets"], ["PATCH", "/api/vault/secrets/s1"], ["DELETE", "/api/vault/secrets/s1"],
+      ["POST", "/api/vault/secrets"], ["PATCH", "/api/vault/secrets/s1"], ["GET", "/api/vault/secrets/s1"], ["DELETE", "/api/vault/secrets"],
       ["POST", "/api/threads/t/messages/m/app"], ["GET", "/api/bots/x/apps/m/rpc"], ["POST", "/api/bots/x/apps/m/delete"],
       ["POST", "/api/bots/x/apps/m/rpc/extra"], ["DELETE", "/api/bots/x/apps/m/context"],
       ["PATCH", "/api/logins/1password/vaults/v1"], ["GET", "/api/bots/x/sign-in-cards/m/done"],
@@ -180,6 +211,7 @@ describe("scopes", () => {
     for (const [method, path] of [
       ["GET", "/api/team/my-connections"], ["POST", "/api/team/my-connections/apps/gmail/connect"], ["DELETE", "/api/team/my-connections/apps/gmail"],
       ["POST", "/api/team/my-connections/mcp/mail/sign-in"], ["PUT", "/api/team/my-connections/mcp/mail/key"], ["DELETE", "/api/team/my-connections/mcp/mail"],
+      ["GET", "/api/vault"], ["DELETE", "/api/vault/secrets/s1"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
       ["PUT", "/api/team/connection-scopes"], ["GET", "/api/team/my-connections/mcp/mail/key"], ["POST", "/api/team/my-connections/apps/gmail"],
@@ -227,7 +259,7 @@ describe("scopes", () => {
   it("lets a bot's maker without the admin scope say who it is and how it looks, never what it may do or whom it directs", () => {
     const profile = { name: "Scout", title: "Trips", soul: "Plans trips.", color: "teal", avatarCrop: "square", voice: "alloy", modelSelection: { instanceId: "claude", model: "m" } };
     expect(adminOnlyBotSetting(profile)).toBeNull();
-    for (const field of ["approvalMode", "autoApprove", "alwaysAllow", "chiefOfStaff", "managedSections", "computer", "cwd", "peers", "approvePeerComms",
+    for (const field of ["approvalMode", "autoApprove", "alwaysAllow", "chiefOfStaff", "managedSections", "computer", "cwd",
       "mcpServers", "browserProfile", "toolScope", "composio", "browser", "section", "visibility", "reportsTo", "preset", "defaultBot", "installedPackage"]) {
       expect(adminOnlyBotSetting({ ...profile, [field]: true }), field).toBe(field);
       expect(botProfileSettings({ ...profile, [field]: true }), field).toEqual(profile);
@@ -345,7 +377,7 @@ describe("resolveRequestAuth", () => {
     const csrf = resolve({ host: "bots.example.com", cookie: `${cookieName}=${token}`, origin: "https://evil.example" }, "/api/bots", "POST");
     expect(csrf.error).toBe("forbidden: cross-origin request");
     expect(sessions.list()[0]?.expiresAt).toBe(session.expiresAt);
-    const overScope = resolve({ authorization: `Bearer ${token}` }, "/api/bots", "POST");
+    const overScope = resolve({ authorization: `Bearer ${token}` }, "/api/webhooks", "POST");
     expect(overScope.status).toBe(403);
     expect(sessions.list()[0]?.expiresAt).toBe(session.expiresAt);
     const { ticket } = sessions.issueStreamTicket(session.id);
@@ -397,12 +429,12 @@ describe("resolveRequestAuth", () => {
     expect(connectorRefresh.auth).toBeNull();
     expect(connectorRefresh.status).toBe(403);
     for (const path of ["/api/desktop-viewer/vps/bot-1", "/api/desktop-viewer/local/shared/websockify", "/api/webhooks/hook-1/address", "/api/setup-import/grok",
-      "/api/local-computer", "/api/bots/bot-1/local-computer"]) {
+      "/api/local-computer", "/api/bots/bot-1/local-computer", "/api/usb-phones/PHONE1/stream", "/api/usb-phones/emulator-5554/stream", "/api/usb-phones/SM.G991B/stream"]) {
       expect(resolveRequestAuth(request({ host: "127.0.0.1:8799" }, "GET"), options(path)).status, path).toBe(403);
       expect(resolveRequestAuth(request({ host: "127.0.0.1:8799", "x-openmausbot-desktop-owner": "owner-token-123" }, "GET"), options(path)).auth?.kind, path)
         .toBe("loopback");
     }
-    for (const path of ["/api/webhooks", "/api/local-computer/instances", "/api/bots/bot-1/local-computer/screenshot"]) {
+    for (const path of ["/api/webhooks", "/api/local-computer/instances", "/api/bots/bot-1/local-computer/screenshot", "/api/usb-phones"]) {
       expect(resolveRequestAuth(request({ host: "127.0.0.1:8799" }, "GET"), options(path)).auth?.kind, path).toBe("loopback");
     }
     expect(resolveRequestAuth(
@@ -708,6 +740,12 @@ describe("loopback trust: owner on one person's machine, service on a shared wor
       expect(denied.status).toBe(403);
       expect(denied.error).toMatch(/shared server.*sign in/);
     }
+  });
+
+  it("lets a local check count the engines that can start a bot, as update.sh does, but no caller through a proxy", () => {
+    expect(check("GET", "/api/health/engines", { trust: "service" }).auth).toEqual({ kind: "loopback", scopes: ["client"], trust: "service" });
+    expect(check("POST", "/api/health/engines", { trust: "service" }).auth).toBeNull();
+    expect(check("GET", "/api/health/engines", { trust: "service", headers: { "x-forwarded-for": "203.0.113.9" } }).auth).toBeNull();
   });
 
   it("still admits a real session with its own scopes on a service-trust server", () => {

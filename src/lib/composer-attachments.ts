@@ -138,12 +138,9 @@ export function imagesThatFit<T extends { name: string; size: number }>(images: 
   return kept;
 }
 
-const ARCHIVE_NAME = /\.(?:rar|7z|tar|gz|tgz|bz2|xz)$/i;
-
 export type AttachProblem =
   | { kind: "too-large"; name: string; limitMb: number }
   | { kind: "unsupported"; names: string[] }
-  | { kind: "archives"; names: string[] }
   | { kind: "image-limit"; names: string[] }
   | { kind: "upload-failed"; name: string; reason: string };
 
@@ -178,7 +175,7 @@ const DOCUMENT_MIMES: Readonly<Record<string, string>> = {
   odt: "application/vnd.oasis.opendocument.text",
   ods: "application/vnd.oasis.opendocument.spreadsheet",
   odp: "application/vnd.oasis.opendocument.presentation",
-  zip: "application/zip",
+  xmind: "application/vnd.xmind.workbook",
 };
 
 const ACCEPTED_DOCUMENT_MIMES = new Set(Object.values(DOCUMENT_MIMES));
@@ -193,6 +190,18 @@ const AUDIO_MIMES_BY_EXTENSION: Readonly<Record<string, string>> = {
   flac: "audio/flac",
   webm: "audio/webm",
 };
+/** Sent as plain files and never unpacked; typed by name alone, since browsers declare archives inconsistently. */
+const ARCHIVE_MIMES_BY_EXTENSION: Readonly<Record<string, string>> = {
+  zip: "application/zip",
+  rar: "application/vnd.rar",
+  "7z": "application/x-7z-compressed",
+  tar: "application/x-tar",
+  gz: "application/gzip",
+  tgz: "application/x-compressed-tar",
+  bz2: "application/x-bzip2",
+  xz: "application/x-xz",
+};
+
 const ACCEPTED_AUDIO_MIMES = new Set([
   ...Object.values(AUDIO_MIMES_BY_EXTENSION),
   "audio/x-m4a", "audio/x-wav", "audio/wave", "audio/x-flac",
@@ -201,8 +210,8 @@ const ACCEPTED_AUDIO_MIMES = new Set([
 export function documentMime(file: Pick<File, "name" | "type">): string | null {
   const declared = file.type.split(";", 1)[0]!.trim().toLowerCase();
   const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
-  // Windows reports a zip as application/x-zip-compressed.
-  if (extension === "zip" || declared === "application/zip" || declared === "application/x-zip" || declared === "application/x-zip-compressed") {
+  // Windows reports a zip as application/x-zip-compressed. The name still has to be a zip.
+  if (extension === "zip" && (declared === "" || declared === "application/octet-stream" || declared === "application/zip" || declared === "application/x-zip" || declared === "application/x-zip-compressed")) {
     return "application/zip";
   }
   if (ACCEPTED_DOCUMENT_MIMES.has(declared)) return declared;
@@ -368,7 +377,8 @@ export async function fileAttachmentFromFile(file: File): Promise<FileAttachment
   const declared = file.type.split(";", 1)[0]!.trim().toLowerCase();
   const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
   const mime = documentMime(file) ??
-    (ACCEPTED_AUDIO_MIMES.has(declared) ? declared : AUDIO_MIMES_BY_EXTENSION[extension]);
+    (ACCEPTED_AUDIO_MIMES.has(declared) ? declared : AUDIO_MIMES_BY_EXTENSION[extension]) ??
+    ARCHIVE_MIMES_BY_EXTENSION[extension];
   if (!mime) return null;
   if (file.size > FILE_MAX_BYTES) throw new AttachError(file.name, FILE_MAX_BYTES);
   const uploadId = newUploadId();
@@ -810,13 +820,10 @@ export async function intakeFiles<T extends DroppedFile & { type: string }>(
   }));
   const attachments = results.flatMap((result) => result.attachments);
   const rejectedNames = results.flatMap((result) => result.rejectedNames);
-  const archives = rejectedNames.filter((name) => ARCHIVE_NAME.test(name));
-  const unsupported = rejectedNames.filter((name) => !ARCHIVE_NAME.test(name));
   const uploadErrors = results.flatMap((result) => result.uploadError ? [result.uploadError] : []);
-  const pathless = [
-    unsupported.length ? `Unable to attach ${unsupported.join(", ")}. Choose a supported image, document, or audio file.` : "",
-    archives.length ? `Archives can't be attached: unzip ${archives.join(", ")} and attach the files inside.` : "",
-  ].filter(Boolean).join(" ") || null;
+  const pathless = rejectedNames.length
+    ? `Unable to attach ${rejectedNames.join(", ")}. Choose a supported image, document, or audio file.`
+    : null;
   const uploadErrorText = results.flatMap((result) => result.uploadErrorText ? [result.uploadErrorText] : []).join("; ") || null;
   const notice = pathless && uploadErrorText ? `${pathless} (${uploadErrorText})` : (pathless ?? uploadErrorText);
   const limited = leftOut.length ? imageLimitNotice(leftOut) : null;
@@ -824,8 +831,7 @@ export async function intakeFiles<T extends DroppedFile & { type: string }>(
     attachments,
     problems: [
       ...(leftOut.length ? [{ kind: "image-limit" as const, names: leftOut }] : []),
-      ...(unsupported.length ? [{ kind: "unsupported" as const, names: unsupported }] : []),
-      ...(archives.length ? [{ kind: "archives" as const, names: archives }] : []),
+      ...(rejectedNames.length ? [{ kind: "unsupported" as const, names: rejectedNames }] : []),
       ...uploadErrors,
     ],
     notice: limited && notice ? `${limited} ${notice}` : (limited ?? notice),

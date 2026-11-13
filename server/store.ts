@@ -4,13 +4,12 @@ import { join } from "node:path"; import { isDeepStrictEqual } from "node:util";
 import { OwnedFile, writeFileAtomic } from "./atomic.ts"; import { saveSoon } from "./save-batch.ts"; import { discardNativeLog } from "./drivers/native.ts";
 import { commitRegistryChange, keptRevocation, saveRegistryFor, touchesPermissions } from "./registry-save.ts";
 import { parseToolScope, toolScopeWidens } from "../shared/tool-scope.ts"; import { grantScopedApps } from "../shared/connector-scopes.ts"; import { dropRetiredApps } from "./retired-apps.ts";
-import { reorderStable } from "../shared/bot-order.ts"; import { trimOutboundPolicy } from "../shared/outbound.ts";
-import { botOwner, chiefConflict, chiefScope, ownerEmail } from "../shared/bot-owner.ts";
-import { ensureSections, readSections, changeEmptySection } from "./section-context.ts";
+import { reorderInPlace } from "../shared/bot-order.ts"; import { trimOutboundPolicy } from "../shared/outbound.ts";
+import { botOwner, chiefConflict, chiefScope, ownerEmail } from "../shared/bot-owner.ts"; import { reshowWhenMoved } from "../shared/default-bot.ts";
+import { ensureSections, readSections, changeEmptySection } from "./section-context.ts"; import { grantNewDepartments } from "./department-grants.ts";
 import type { TeamComputers } from "./team-computers.ts";
 import { removeBotFolder, soulFile, soulHash, writeSoulMirror } from "./bot-folder.ts";
 import type { BotProfilePatch } from "./bot-profile.ts";
-import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR, EVENTS_DIR, NATIVE_DIR, loadBrowserProfileIdAliases } from "./config.ts";
 import * as mdb from "./message-db.ts";
 import { forgetBotMemoryJournal, journalFile } from "./memory-journal.ts";
@@ -39,7 +38,7 @@ import { movesThreadToTop, nextOpenThread } from "../shared/wire.ts";
 import { parseConnectorTools } from "./connector-tools.ts";
 import { sameModelSelection } from "../shared/thread-model.ts";
 import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
-import { appsFromCreator } from "./inherited-apps.ts";
+import { appsFromCreator } from "./inherited-apps.ts"; import { newBotOwner, sharedAsMaker, sharedUnlessRestricted, type NewBotSharingRule } from "./new-bot-sharing.ts";
 import { ThreadCache, type ThreadState } from "./thread-cache.ts";
 import { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
 export { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
@@ -106,7 +105,7 @@ const ASK_NOW = { approvalMode: "ask" as const, autoApprove: false, alwaysAllow:
 const TASK_PATCH_FIELDS = [
   "title", "projectId", "modelSelection", "approvalMode", "autoApprove", "alwaysAllow",
   "unread", "lastReadMessageId", "rewound", "archivedAt", "pinned", "pinnedMessageId", "resumeCursors", "lastInstanceId", "cwd",
-  "routineRunId", "surface", "surfaceSource", "snoozedUntil", "link", "linkAuto", "appliedCompactionId", "contextFloor", "lastContextModel", "setupRequest", "botApi", "outside",
+  "routineRunId", "surface", "surfaceSource", "snoozedUntil", "link", "linkAuto", "appliedCompactionId", "contextFloor", "lastContextModel", "usage", "setupRequest", "botApi", "outside",
 ] as const satisfies readonly (keyof TaskRecord)[];
 export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number]>>;
 
@@ -133,8 +132,8 @@ export type StoreChange =
   | { type: "thread.deleted"; threadId: string }
   | { type: "bot"; botId: string }
   | { type: "bot.deleted"; botId: string }
-  /** The fleet was reordered as a whole; the broadcast carries every id in its new place. */
-  | { type: "bots.order" }
+  /** The fleet or the rooms were reordered as a whole; the broadcast carries every id in its new place. */
+  | { type: "bots.order" } | { type: "groups.order" }
   | { type: "group"; groupId: string }
   | { type: "group.deleted"; groupId: string };
 
@@ -282,13 +281,15 @@ function taskCountsAsBotUnread(task: { unread?: boolean; routineRunId?: string }
 
 export class Store {
   bots: BotRecord[] = [];
-  groups: GroupRecord[] = [];
+  groups: GroupRecord[] = []; /** Told before a delete of these conversations is tried; "thread.deleted" follows only for those that went. Must not throw. */ threadsGoing: (threadIds: readonly string[]) => void = () => {};
   private threads = new ThreadCache(() => this.busyThreadIds());
   private defaultSelection: () => ModelSelection;
   private completeNewBotSelection: (selection: ModelSelection) => ModelSelection;
   private driverKindOf: (instanceId: string) => string | undefined;
   private initialLanguage: string | (() => string);
   private personName: () => string | undefined;
+  /** How a new bot is shared; a Team Cloud sets its own rule. */
+  newBotSharing: NewBotSharingRule = sharedUnlessRestricted;
   private listeners = new Set<(change: StoreChange) => void>();
   private registeringInitialSections = true;
   private readonly botsFile = new OwnedFile(BOTS_FILE, { mode: 0o600 }); private readonly groupsFile = new OwnedFile(GROUPS_FILE, { mode: 0o600 });
@@ -436,22 +437,11 @@ export class Store {
       delete b.managedSections;
       botsMigrated = true;
     }
-    // A legacy ask_bot:@Name grant converts only when the name is unique; an ambiguous one stays inert.
-    for (const b of this.bots) {
-      if (!b.alwaysAllow?.length) continue;
-      let changed = false;
-      const migrated = b.alwaysAllow.map((key) => {
-        const match = key.match(/^(ask_bot|delegate_bot):@(.+)$/);
-        if (!match) return key;
-        const candidates = this.bots.filter((candidate) => candidate.name === match[2]);
-        if (candidates.length !== 1) return key;
-        changed = true;
-        return peerAllowKey(match[1] as PeerAction, candidates[0]!.id);
-      });
-      if (changed) {
-        b.alwaysAllow = [...new Set(migrated)];
-        botsMigrated = true;
-      }
+    for (const b of this.bots as Array<BotRecord & { peers?: unknown; approvePeerComms?: unknown }>) {
+      if (!("peers" in b) && !("approvePeerComms" in b)) continue;
+      delete b.peers;
+      delete b.approvePeerComms;
+      botsMigrated = true;
     }
     // Recover only app-issued provider-tool grants into bot defaults, never task/session grants such as shell commands.
     for (const b of this.bots) {
@@ -707,7 +697,8 @@ export class Store {
 
   private rememberSections(names: (string | undefined)[]) {
     try {
-      if (ensureSections(names)) this.emit({ type: "sections" });
+      const added = ensureSections(names); // a name an older save left unregistered at startup is not a new department
+      if (added.length) { this.emit({ type: "sections" }); if (!this.registeringInitialSections) grantNewDepartments(this, added); }
     } catch (error) {
       if (!this.registeringInitialSections) throw error;
       console.warn(`[teams] Startup could not register team names; saved teams and shared instructions were left unchanged: ${(error as Error).message}`);
@@ -785,7 +776,7 @@ export class Store {
       return "Stop this department's active work before deleting it";
     }
     const nextBots = this.bots.map(bot => ({ ...bot,
-      ...(sectionKey(bot.section) === name ? { section: undefined } : {}),
+      ...(sectionKey(bot.section) === name ? reshowWhenMoved(bot, { section: undefined }) : {}),
       ...(bot.managedSections ? { managedSections: bot.managedSections.filter(section => sectionKey(section) !== name) } : {}),
     }));
     if (chiefConflict(nextBots)) {
@@ -927,7 +918,7 @@ export class Store {
   deleteGroup(id: string): boolean {
     const group = this.group(id);
     if (!group) return false;
-    const remaining = this.groups.filter((g) => g.id !== id);
+    const remaining = this.groups.filter((g) => g.id !== id); this.threadsGoing([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)]);
     saveRegistryFor("groups.json", group.dm ? "the chat deletion" : "the room deletion", () => this.saveGroups(remaining));
     this.groups = remaining;
     for (const threadId of new Set([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)])) {
@@ -1071,7 +1062,7 @@ export class Store {
     const missing = unique.filter((id) => !present.has(id));
     if (deleted.length >= group.tasks.length) return null;
     if (!deleted.length) return { group, deleted, missing };
-    const doomed = new Set(deleted);
+    const doomed = new Set(deleted); this.threadsGoing(deleted);
     mdb.deleteThreads(deleted, () => this.commitGroupChange(group, "the thread deletion", () => {
       group.tasks = group.tasks!.filter((task) => !doomed.has(task.threadId));
       if (doomed.has(group.threadId)) mirrorActiveGroupTask(group, group.tasks[0]!);
@@ -1309,7 +1300,7 @@ export class Store {
       >
     > = {},
     opts: {
-      seedMessages?: boolean; id?: string; threadId?: string;
+      seedMessages?: boolean; id?: string; threadId?: string; beforeShown?: (bot: BotRecord) => void;
     } = {},
   ): BotRecord {
     const toolScope = parseToolScope(profile.toolScope);
@@ -1329,8 +1320,7 @@ export class Store {
       color: profile.color ?? rotationColor(this.bots.length), mascotFaceColor: profile.mascotFaceColor ?? undefined,
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
-      // Restricted from its first frame: no one else is ever told it exists.
-      ...(profile.visibility && profile.visibility !== "everyone" ? { visibility: structuredClone(profile.visibility) } : {}),
+      ...this.newBotSharing(profile.visibility, newBotOwner(profile)),
       ...(toolScope.scope ? { toolScope: toolScope.scope } : {}),
       unread: false,
       modelSelection: this.newBotSelection(profile.modelSelection),
@@ -1360,7 +1350,7 @@ export class Store {
       console.warn(`[bot-folder] could not write SOUL.md mirror for ${bot.id}: ${(e as Error).message}`);
     }
     // Before its transcript: clients need the bot/thread mapping to place either message.
-    this.emit({ type: "bot", botId: bot.id });
+    opts.beforeShown?.(bot); this.emit({ type: "bot", botId: bot.id });
     if (opts.seedMessages !== false) {
       this.appendMessage(bot.threadId, initialGreetingMessage(name, this.initialLanguage, !bot.soul?.trim() && !bot.description.trim(), this.personName()));
     }
@@ -1386,9 +1376,8 @@ export class Store {
         next = { id: operation.botId, threadId: operation.threadId, name: operation.fields.name,
           title: "", description: "", soul: "", notifications: true, color: rotationColor(nextBots.length), unread: false,
           resumeCursors: {}, createdAt, ...operation.fields, modelSelection,
-          autoApprove: false, approvePeerComms: false,
-          // A restricted Chief never creates a bot everyone sees.
-          ...(chief.visibility && chief.visibility !== "everyone" ? { visibility: structuredClone(chief.visibility) } : {}),
+          autoApprove: false,
+          ...sharedAsMaker(chief),
           // A Chief's new specialist reports to the Chief's own person.
           ...(botOwner(chief) ? { createdBy: botOwner(chief)! } : {}),
           tasks: [{ threadId: operation.threadId, title: UNTITLED_THREAD, createdAt, updatedAt: createdAt, resumeCursors: {},
@@ -1400,7 +1389,7 @@ export class Store {
       } else {
         if (at < 0) throw new Error("A setup target no longer exists");
         const previous = nextBots[at];
-        next = { ...previous, ...operation.fields };
+        next = { ...previous, ...reshowWhenMoved(previous, operation.fields) };
         if (operation.fields.modelSelection) next.tasks = this.withDefaultModel(previous, operation.fields.modelSelection);
         nextBots[at] = next;
       }
@@ -1462,7 +1451,7 @@ export class Store {
     const bot = this.bot(id);
     if (!bot) return false;
     if (bot.defaultBot) throw Object.assign(new Error(defaultBotRefusal(bot.name)), { status: 409 });
-    let nextBots = this.bots.filter((b) => b.id !== id);
+    let nextBots = this.bots.filter((b) => b.id !== id); this.threadsGoing([bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)]);
     if (setupRequest) {
       const chief = this.bot(setupRequest.botId);
       if (!chief || chief.id === id || setupRequest.deletion?.botId !== id) throw new Error("The reviewed deletion no longer has a valid owner");
@@ -1506,7 +1495,7 @@ export class Store {
 
   patchBot(id: string, patch: Partial<BotRecord>): BotRecord | null {
     const bot = this.bot(id);
-    if (!bot) return null;
+    if (!bot) return null; patch = reshowWhenMoved(bot, patch);
     if (patch.connectorTools !== undefined) {
       const parsed = parseConnectorTools(patch.connectorTools);
       if (!parsed.ok) throw new Error(parsed.error);
@@ -1562,7 +1551,7 @@ export class Store {
   patchBotProfile(id: string, patch: BotProfilePatch & Partial<Pick<BotRecord, "cwd" | "lastProfileRequestId">>): BotRecord | null {
     const bot = this.bot(id);
     if (!bot) return null;
-    const next = { ...bot, ...patch };
+    const next = { ...bot, ...reshowWhenMoved(bot, patch) };
     if (patch.soul !== undefined) {
       next.soulHash = soulHash(patch.soul);
       next.soulDrift = false;
@@ -1594,7 +1583,7 @@ export class Store {
     const selected = targets as BotRecord[];
     const patches = new Map<string, Partial<BotRecord>>();
     for (const bot of selected) {
-      patches.set(bot.id, { section: targetSection || undefined });
+      patches.set(bot.id, reshowWhenMoved(bot, { section: targetSection || undefined }));
     }
     if (chiefConflict(this.bots.map((bot) => ({ ...bot, ...patches.get(bot.id) })))) return { ok: false, reason: "chief-conflict" };
 
@@ -1631,7 +1620,7 @@ export class Store {
       if (removes.has(id) && sectionKey(bot.section) !== key) return { ok: false, reason: "membership-changed" };
     }
     const next = this.bots.map(bot => ids.has(bot.id)
-      ? { ...bot, section: adds.has(bot.id) ? key : undefined } : bot);
+      ? { ...bot, ...reshowWhenMoved(bot, { section: adds.has(bot.id) ? key : undefined }) } : bot);
     if (chiefConflict(next)) return { ok: false, reason: "chief-conflict" };
     if (ids.size) {
       this.saveBots(next);
@@ -1690,8 +1679,7 @@ export class Store {
       const next = bot.id === id;
       if (Boolean(bot.chiefOfStaff) === next && !(next && bot.hidden)) continue;
       if (next) {
-        bot.chiefOfStaff = true;
-        bot.hidden = false;
+        bot.chiefOfStaff = true; bot.hidden = false;
       } else {
         bot.chiefOfStaff = false;
         delete bot.managedSections;
@@ -1981,18 +1969,18 @@ export class Store {
     return bot.projects;
   }
 
-  /** A stable partial reorder of the fleet (shared/bot-order.ts): the listed bots take, in the order given, the positions
+  /** A stable partial reorder of the fleet, or with reorderGroups of the rooms (shared/bot-order.ts): the listed bots take, in the order given, the positions
    * they already share; every other bot stays put. Empty, repeated or unknown ids change nothing and give null. */
   reorderBots(botIds: string[]): BotRecord[] | null {
-    if (!botIds.length || new Set(botIds).size !== botIds.length) return null;
-    const byId = new Map(this.bots.map((bot) => [bot.id, bot]));
-    if (botIds.some((id) => !byId.has(id))) return null;
-    const next = reorderStable(this.bots, botIds);
-    // Mutate in place: schedulers and other consumers hold this array and its records.
-    this.bots.splice(0, this.bots.length, ...next);
+    if (!reorderInPlace(this.bots, botIds)) return null;
     this.saveBots();
     this.emit({ type: "bots.order" });
     return this.bots;
+  }
+
+  reorderGroups(groupIds: string[]): GroupRecord[] | null {
+    const next = [...this.groups]; if (!reorderInPlace(next, groupIds)) return null; // saved before the live list changes
+    this.saveGroups(next, false); this.groups.splice(0, this.groups.length, ...next); this.emit({ type: "groups.order" }); return this.groups;
   }
 
   deleteProject(botId: string, projectId: string): BotRecord | null {
@@ -2168,7 +2156,7 @@ export class Store {
   }
 
   createTask(botId: string, title?: string, activate = true, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: "ask" | "full",
-    modelSelection?: ModelSelection, cwd?: string): TaskRecord | null {
+    modelSelection?: ModelSelection, cwd?: string, beforeShown?: (task: TaskRecord) => void): TaskRecord | null {
     const bot = this.bot(botId);
     if (!bot) return null;
     if (projectId !== undefined && !this.project(botId, projectId)) return null;
@@ -2177,7 +2165,7 @@ export class Store {
       bot.tasks = [task, ...(bot.tasks ?? [])];
       if (activate) this.mirrorActiveTask(bot, task);
     });
-    this.emit({ type: "bot", botId });
+    beforeShown?.(task); this.emit({ type: "bot", botId });
     return task;
   }
 
@@ -2279,7 +2267,7 @@ export class Store {
     const deleted = unique.filter((id) => present.has(id));
     const missing = unique.filter((id) => !present.has(id));
     if (!deleted.length) return { bot, deleted, missing };
-    const doomed = new Set(deleted);
+    const doomed = new Set(deleted); this.threadsGoing(deleted);
     mdb.deleteThreads(deleted, () => this.commitBotChange(bot, "the thread deletion", () => {
       const kept = bot.tasks!.filter((t) => !doomed.has(t.threadId));
       const visible = nextOpenThread(kept) ?? this.buildTask(bot);
@@ -2298,6 +2286,6 @@ export class Store {
   /** A new place's first bot is its MausBot and its Chief; a Team Cloud's (`defaultBot: false`) is the team's Chief only. */
   seedIfEmpty({ defaultBot = true, intro }: { defaultBot?: boolean; intro?: DefaultBotIntro } = {}) {
     if (!this.needsSeed()) return;
-    if (defaultBot) createDefaultBot(this, { chief: (id) => this.setChiefOfStaff(id), ...(intro ? { intro } : {}) }); else this.setChiefOfStaff(this.createBot().id);
+    if (defaultBot) createDefaultBot(this, { chief: (id) => this.setChiefOfStaff(id), ...(intro ? { intro } : {}) }); else this.setChiefOfStaff(this.createBot({ visibility: "everyone" }).id);
   }
 }

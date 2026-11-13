@@ -337,6 +337,15 @@ describe("OpenCode catalog", () => {
     expect(openCodePromptUnreachedModel(apiError(message))).toBe(true);
   });
 
+  // OpenCode 2.2.5's ACP answer for a model declared under a provider it has no SDK package for.
+  it("knows a model OpenCode has no route to never got the prompt", () => {
+    expect(openCodePromptUnreachedModel(Object.assign(
+      new Error("Internal error: Unsupported package for chutes/deepseek-ai/DeepSeek-V4.1-Flash-1017: unknown (session/prompt, service: session, provider.no-route)"),
+      { code: -32603, data: { service: "session", errorName: "provider.no-route" } },
+    ))).toBe(true);
+    expect(classifyOpenCodeError({ code: -32603, data: { service: "session", errorName: "provider.no-route" } })).toBeUndefined();
+  });
+
   it.each([
     apiError("Internal error: Invalid API key."),
     apiError("Internal error: socket hang up"),
@@ -373,6 +382,24 @@ describe("OpenCode catalog", () => {
     expect(facts.limitModels).toEqual(expect.arrayContaining(["opencode/deepseek-v4.1-flash-free", "opencode/big-pickle"]));
     expect(facts.limitModels).not.toContain("opencode-go/deepseek-v4.1-flash");
     expect(openCodeLimitFacts(said), "a refusal that names no model holds just the model scope").toEqual({ limit: "model" });
+  });
+
+  // OpenCode Go's weekly allowance is the Go subscription's alone: Zen's free models on the same login keep working, so a
+  // free model there is still a backup when a Go model runs out.
+  it("holds only the Go models when a Go model meets the Go allowance, never Zen's free models", () => {
+    parseOpenCodeModelsOutput([
+      "opencode/deepseek-v4.1-flash-free", JSON.stringify({ cost: { input: 0, output: 0 } }),
+      "opencode-go/glm-5.3", JSON.stringify({ cost: { input: 1, output: 2 } }),
+      "opencode-go/minimax-m3", JSON.stringify({ cost: { input: 1, output: 2 } }),
+    ].join("\n"));
+    for (const said of ["OpenCode Go weekly usage limit reached", "Internal error: GoUsageLimitError: the Go allowance is used up"]) {
+      const facts = openCodeLimitFacts(said, "opencode-go/minimax-m3");
+      expect(facts.limit, said).toBe("model");
+      expect(facts.limitModels).toEqual(expect.arrayContaining(["opencode-go/minimax-m3", "opencode-go/glm-5.3"]));
+      expect(facts.limitModels).not.toContain("opencode/deepseek-v4.1-flash-free");
+    }
+    expect(openCodeLimitFacts("OpenCode Go weekly usage limit reached", "opencode/big-pickle"), "a limit met by another model still holds the account")
+      .toEqual({ limit: "engine" });
   });
 
   it("classifies OpenCode 2's authentication refusal and leaves real internal errors alone", () => {

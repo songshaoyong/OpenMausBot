@@ -197,10 +197,10 @@ describe("control-omb ui drives the real renderer", () => {
     })()`);
     await click("You");
     await click("Settings");
-    // Settings is a lazy chunk: it paints once the chunk arrives. Keys sit on the AI page, under API keys.
+    // Settings is a lazy chunk: it paints once the chunk arrives. Keys sit on the AI page, under Other services.
     await expect.poll(() => evaluate(`(() => {
       document.querySelector('[data-settings-page="ai"]')?.click();
-      document.querySelector('[data-settings-disclosure="ai-keys"] button[aria-expanded="false"]')?.click();
+      document.querySelector('[data-settings-disclosure="ai-other-services"] button[aria-expanded="false"]')?.click();
       return Boolean(${row}?.checkVisibility());
     })()`), { timeout: 10_000 }).toBe(true);
     // The servers section opens on its own, because a key is saved there.
@@ -264,7 +264,8 @@ describe("control-omb ui drives the real renderer", () => {
     const models = await runControlOmb(["models", "--url", info.url]) as any;
     const options = models.instances.find((instance: any) => instance.instanceId === originalBot.modelSelection.instanceId).models.options;
     const originalLabel = options.find((option: any) => option.id === originalModel).label;
-    const nextModel = options.find((option: any) => option.id !== originalModel);
+    // A model the installed CLI is too old for is listed but cannot be picked.
+    const nextModel = options.find((option: any) => option.id !== originalModel && !option.needsCliUpdate);
     // The picker sets the bot's model, which every chat of it uses.
     const threadModel = async () => (await savedBot()).tasks.find((task: any) => task.threadId === originalBot.threadId).modelSelection.model;
     await ui("click", info.ui, "--name", originalLabel);

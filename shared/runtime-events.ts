@@ -125,7 +125,7 @@ export type RuntimeEvent = RuntimeEventBase &
      * store and never forwarded to renderer SSE. `fromTool`: a tool's result
      * returned the image to the engine; the bot did not make or send it. */
     | { type: "item.completed"; itemType: "assistant_image"; data: string; alt?: string; fromTool?: true }
-    | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
+    | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string; /** A room reply as it goes out: the member speaking. */ botId?: string }
     | {
         type: "request.opened";
         requestType: "permission" | "question";
@@ -204,6 +204,8 @@ export type RuntimeEvent = RuntimeEventBase &
     /** Something the person should know that did not fail the turn — for
      * example, a saved model the engine no longer offers was replaced. */
     | { type: "runtime.notice"; message: string; text?: ServerText }
+    /** The engine condensed the conversation into its own summary (Claude Code's compact_boundary); the chat marks it. */
+    | { type: "context.compacted" }
   );
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void;
