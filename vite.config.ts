@@ -78,8 +78,12 @@ export default defineConfig({
   },
   server: {
     // IPv4 explicitly — a bare ::1 bind makes localhost a coin-flip for
-    // clients that resolve IPv4 first
-    host: "127.0.0.1",
+    // clients that resolve IPv4 first. OMB_UI_HOST=0.0.0.0 exposes the dev UI
+    // to the local network; the app itself is still reached through this proxy,
+    // which forwards a loopback Origin so the server keeps treating the caller
+    // as this machine.
+    host: process.env.OMB_UI_HOST?.trim() || "127.0.0.1",
+    ...(process.env.OMB_UI_HOST ? { allowedHosts: true as const } : {}),
     port: Number(process.env.OMB_UI_PORT) || 5199,
     // packager output lands inside the repo — its HTML files must never
     // trigger dev full-page reloads
@@ -88,14 +92,29 @@ export default defineConfig({
     },
     // the harness server owns every provider process; the app only ever
     // talks to /api — clients hold no transports
-    proxy: {
-      "/api": {
-        ws: true,
-        target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
-      },
-      "/.well-known/openmausbot/environment": {
-        target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
-      },
-    },
+    proxy: (() => {
+      const target = `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`;
+      if (!process.env.OMB_UI_HOST) {
+        return { "/api": { ws: true, target }, "/.well-known/openmausbot/environment": { target } };
+      }
+      // On a LAN listener the server only sees this proxy, so a browser on another machine would look exactly like
+      // this one and be trusted as the owner. Naming the real peer in X-Forwarded-For is what the server's isProxied()
+      // reads to refuse loopback trust; a browser on this machine keeps its loopback peer and stays the owner.
+      const loopbackPeer = (address: string | undefined) => !address || /^(?:127\.|::1$|::ffff:127\.)/.test(address);
+      const nameRemotePeer = (proxy: { on(event: string, listener: (...args: any[]) => void): void }) => {
+        proxy.on("proxyReq", (request: { getHeader(name: string): unknown; setHeader(name: string, value: string): void }, req: { socket?: { remoteAddress?: string } }) => {
+          const address = req.socket?.remoteAddress;
+          if (!loopbackPeer(address) && request.getHeader("x-forwarded-for") === undefined) request.setHeader("x-forwarded-for", address!);
+        });
+        proxy.on("proxyReqWs", (request: { getHeader(name: string): unknown; setHeader(name: string, value: string): void }, req: { socket?: { remoteAddress?: string } }) => {
+          const address = req.socket?.remoteAddress;
+          if (!loopbackPeer(address) && request.getHeader("x-forwarded-for") === undefined) request.setHeader("x-forwarded-for", address!);
+        });
+      };
+      return {
+        "/api": { ws: true, target, changeOrigin: true, headers: { origin: target }, configure: nameRemotePeer },
+        "/.well-known/openmausbot/environment": { target, changeOrigin: true, headers: { origin: target }, configure: nameRemotePeer },
+      };
+    })(),
   },
 });

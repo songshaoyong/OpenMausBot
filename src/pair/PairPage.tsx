@@ -28,8 +28,9 @@ export function pairsAutomatically(initialCode: string | null, desktop = typeof 
   return Boolean(initialCode) && desktop;
 }
 
-export function pairIntro({ mode, sent, email, cloudHome }: { mode: "email" | "code" | null; sent: boolean; email: string; cloudHome: boolean }): string {
+export function pairIntro({ mode, sent, email, cloudHome }: { mode: "password" | "email" | "code" | null; sent: boolean; email: string; cloudHome: boolean }): string {
   if (mode === "email") return sent ? t("pair.intro.emailSent", { email }) : t("pair.intro.email");
+  if (mode === "password") return t("pair.intro.password");
   if (cloudHome) return t("pair.intro.cloud", { app: productName(), open: t("cloudHome.connect"), section: t("settings.section.cloudAccount") });
   return t("pair.intro.code");
 }
@@ -57,7 +58,7 @@ export function unencryptedPublic(where: { protocol: string; hostname: string })
   return where.protocol === "http:" && !isPrivateHost(where.hostname);
 }
 
-export function pairTitle(environment: EnvironmentDescriptor | null, mode: "email" | "code" | null): string {
+export function pairTitle(environment: EnvironmentDescriptor | null, mode: "password" | "email" | "code" | null): string {
   if (environment?.capabilities.cloudTeam) return environment.label;
   if (environment?.capabilities.cloudHome) return t("pair.myCloud");
   return t(mode === "email" ? "pair.signInTo" : "pair.connectTo", { name: environment?.label ?? t("pair.thisOpenMausBot", { app: productName() }) });
@@ -71,8 +72,9 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attemptId, setAttemptId] = useState(() => newAttemptId());
-  const [mode, setMode] = useState<"email" | "code">(initialEmail && !initialCode ? "email" : "code");
+  const [mode, setMode] = useState<"password" | "email" | "code">(initialEmail && !initialCode ? "email" : "password");
   const [email, setEmail] = useState(initialEmail ?? "");
+  const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [sent, setSent] = useState(false);
   const [opening, setOpening] = useState(() => pairsAutomatically(initialCode));
@@ -139,7 +141,30 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
     setSent(true);
   }
 
-  function switchMode(next: "email" | "code") {
+  async function submitPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/auth/password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password, label, cookie: true }),
+      });
+      if (!response.ok) {
+        const said = await response.json().catch(() => null) as { error?: string } | null;
+        setError(said?.error ?? t("pair.signInFailed"));
+        setBusy(false);
+        return;
+      }
+      location.replace(pairedDestination(location.search));
+    } catch {
+      setError(t("pair.signInFailed"));
+      setBusy(false);
+    }
+  }
+
+  function switchMode(next: "password" | "email" | "code") {
     setMode(next);
     setError(null);
   }
@@ -167,6 +192,49 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
               {t("pair.openApp")}
             </a>
           </p>
+        ) : mode === "password" ? (
+          <form onSubmit={submitPassword}>
+            <label className={fieldLabel} htmlFor="signin-email">
+              {t("people.userEmail")}
+            </label>
+            <input
+              id="signin-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              inputMode="email"
+              spellCheck={false}
+              className={input}
+            />
+            <label className={fieldLabel} htmlFor="signin-password">
+              {t("people.userPassword")}
+            </label>
+            <input
+              id="signin-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              className={input}
+            />
+            <label className={fieldLabel} htmlFor="signin-label">
+              {t("pair.deviceLabel")}
+            </label>
+            <input id="signin-label" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={80} className={input} />
+            {error ? <p className="mt-3 text-[13px] text-danger">{error}</p> : null}
+            <button type="submit" disabled={busy || !email.includes("@") || !password} className={button}>
+              {t(busy ? "pair.signingIn" : "pair.signIn")}
+            </button>
+            <button type="button" onClick={() => switchMode("code")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
+              {t("pair.useCode")}
+            </button>
+            {emailOffered ? (
+              <button type="button" onClick={() => switchMode("email")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
+                {t("pair.useEmail")}
+              </button>
+            ) : null}
+          </form>
         ) : mode === "email" ? (
           <form onSubmit={submitEmail}>
             <label className={fieldLabel} htmlFor="signin-email">

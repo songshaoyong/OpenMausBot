@@ -7108,6 +7108,7 @@
   "keys.search.placeholder": "키 검색",
   "keys.search.aria": "API 키 검색",
   "keys.search.none": "“{query}”와(과) 일치하는 키가 없어요.",
+  "keys.search.clear": "검색어 지우기",
   "keys.openPage": "API 키 열기",
   "engineSetup.apiKey.inline": "여기에 붙여 넣으세요. 알아서 저장하고 확인한 뒤 모델이 여기에 나타나요.",
   "secretCard.ref": "{app}이 자체 도구에서 한 번 쓰도록 보관해요. 봇은 절대 보지 못하고, 채팅에도 추가되지 않아요.",

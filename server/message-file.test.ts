@@ -290,11 +290,12 @@ describe("message-linked files", () => {
     }
   });
 
-  it("serves OpenDocument formats with their standard MIME types", async () => {
+  it("serves OpenDocument and zip with their standard MIME types", async () => {
     for (const [extension, mime] of [
       ["odt", "application/vnd.oasis.opendocument.text"],
       ["ods", "application/vnd.oasis.opendocument.spreadsheet"],
       ["odp", "application/vnd.oasis.opendocument.presentation"],
+      ["zip", "application/zip"],
     ] as const) {
       writeFileSync(join(workspace, `document.${extension}`), "open document");
       const file = await openMessageFile(`document.${extension}`, [workspace]);

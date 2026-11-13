@@ -7615,6 +7615,7 @@
   "keys.search.placeholder": "搜尋金鑰",
   "keys.search.aria": "搜尋 API 金鑰",
   "keys.search.none": "沒有符合「{query}」的金鑰。",
+  "keys.search.clear": "清除搜尋",
   "keys.openPage": "開啟 API 金鑰",
   "engineSetup.apiKey.inline": "請貼在這裡。系統會自動儲存並檢查，模型就會顯示在這裡。",
   "commandPalette.searchLabel": "搜尋機器人、群組聊天和訊息",

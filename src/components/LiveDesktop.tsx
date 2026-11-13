@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Hand, Loader2, Minimize2, RefreshCw, Send } from "lucide-react";
 import type RFB from "@novnc/novnc";
 import { cn } from "@/lib/cn";
+import { copyText } from "@/lib/copy-text";
 import { connectDesktop, typeOnDesktop } from "@/lib/desktop-connection";
 import { t } from "@/lib/i18n";
 import { useCaptionChrome, useDesktopCapabilities } from "./DesktopCapabilities";
@@ -27,6 +28,7 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
   const [connection, setConnection] = useState<Connection>("connecting");
   const [attempt, setAttempt] = useState(0);
   const [text, setText] = useState("");
+  const [clipboardState, setClipboardState] = useState<"copied" | "failed" | null>(null);
   const live = useRef(false);
   const { dragProps, noDragStyle } = useCaptionChrome();
   const macInset = useDesktopCapabilities().capabilities.windowChrome === "mac-inset";
@@ -52,6 +54,15 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
           setConnection("connected");
         },
         disconnected: lost,
+        // A copy inside the desktop comes with the next frame; putting it on this machine's clipboard is
+        // the only path that works on a plain-HTTP LAN address, where the browser hides the async API.
+        clipboard: (text) => {
+          if (!text.trim()) return;
+          void copyText(text).then((result) => {
+            setClipboardState(result === "copied" ? "copied" : "failed");
+            window.setTimeout(() => setClipboardState(null), 1_500);
+          });
+        },
       },
     }).then((connected) => {
       if (controller.signal.aborted) return connected.disconnect();
@@ -69,6 +80,36 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
   useEffect(() => {
     if (connection === "connected") rfb.current?.focus({ preventScroll: true });
   }, [expanded, connection]);
+
+  // A paste while the person is watching the desktop types into it, like the text box does: the desktop's own
+  // clipboard would need Ctrl+V, which means different things in a terminal and in a browser. Read the paste
+  // wherever the focus happens to sit, as long as the last press was inside the picture.
+  useEffect(() => {
+    if (connection !== "connected") return;
+    let inside = false;
+    const onDown = (event: PointerEvent) => {
+      const screenNode = screen.current;
+      inside = Boolean(screenNode && event.target instanceof Node && screenNode.contains(event.target));
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const screenNode = screen.current;
+      const target = event.target as Node | null;
+      const active = document.activeElement;
+      if (!screenNode || !(inside || screenNode.contains(target) || screenNode.contains(active))) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text) return;
+      event.preventDefault();
+      inside = false;
+      const client = rfb.current;
+      if (client) typeOnDesktop(client, text);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, [connection]);
 
   const label = t("computer.viewerTitle", { name });
   const pill = (
@@ -133,6 +174,14 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
           <img src={poster} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-contain opacity-50" />
         )}
         <div ref={screen} role="application" aria-label={label} className="absolute inset-0" />
+        {clipboardState && (
+          <div
+            role="status"
+            className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-black/75 px-3 py-1 text-[11px] font-medium text-white shadow-sm"
+          >
+            {t(clipboardState === "copied" ? "computer.clipboardCopied" : "computer.clipboardFailed")}
+          </div>
+        )}
         {connection === "connecting" && (
           <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-[12px] text-ink-secondary">
             <Loader2 size={16} className="animate-spin" aria-hidden="true" />

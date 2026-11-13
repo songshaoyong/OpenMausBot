@@ -158,13 +158,18 @@ describe("intakeFiles", () => {
     expect(out.notice).toBeNull();
   });
 
-  it("explains that an archive needs unzipping instead of calling it unsupported", async () => {
-    const out = await intakeFiles([file("아카이브.zip", "application/zip"), file("run.exe", "application/octet-stream")], {
-      allowImages: true, getPath: () => "", uploadImage: upload, uploadFile: async () => null,
+  it("uploads a zip and still refuses other archives", async () => {
+    const out = await intakeFiles([file("아카이브.zip", "application/x-zip-compressed"), file("아카이브.rar", "application/vnd.rar"), file("run.exe", "application/octet-stream")], {
+      allowImages: true,
+      getPath: () => "",
+      uploadImage: upload,
+      uploadFile: async (value) => value.name.endsWith(".zip")
+        ? { kind: "file", id: "zip", name: value.name, path: "/private/attachments/id.zip", size: value.size }
+        : null,
     });
-    expect(out.attachments).toEqual([]);
+    expect(out.attachments).toEqual([expect.objectContaining({ kind: "file", name: "아카이브.zip", path: "/private/attachments/id.zip" })]);
     expect(out.notice).toBe(
-      "Unable to attach run.exe. Choose a supported image, document, or audio file. Archives can't be attached: unzip 아카이브.zip and attach the files inside.",
+      "Unable to attach run.exe. Choose a supported image, document, or audio file. Archives can't be attached: unzip 아카이브.rar and attach the files inside.",
     );
   });
 

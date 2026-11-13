@@ -7117,6 +7117,7 @@
   "keys.search.placeholder": "Buscar chaves",
   "keys.search.aria": "Buscar chaves de API",
   "keys.search.none": "Nenhuma chave corresponde a “{query}”.",
+  "keys.search.clear": "Limpar busca",
   "keys.openPage": "Abrir Chaves de API",
   "engineSetup.apiKey.inline": "Cole aqui. A chave é salva e verificada automaticamente, e os modelos aparecem aqui.",
   "commandPalette.searchLabel": "Buscar bots, chats em grupo e mensagens",

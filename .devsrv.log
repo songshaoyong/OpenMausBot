@@ -1,0 +1,12 @@
+bot box: off (not-cloud)
+openmausbot webhook receiver on http://127.0.0.1:8800
+openmausbot open-source edition (enterprise layer present but OMB_LICENSE_KEY is not set)
+local requests: owner trust (self-hosted default)
+local requests: OMB_DEV_TRUST_LOCAL_BROWSER=1: browsers on this machine act as the owner (development only)
+brand: default
+openmausbot server on http://127.0.0.1:8799
+browser: Google Chrome 155 (installed)
+account added: cailuohe@qq.com (member)
+password sign-in refused from 192.168.66.50
+account removed: cailuohe@qq.com
+account added: 675936383@qq.com (member)

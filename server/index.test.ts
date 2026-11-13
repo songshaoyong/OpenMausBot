@@ -5269,9 +5269,21 @@ describe("harness HTTP API", () => {
       expect(statSync(result.path).mode & 0o777).toBe(0o600);
     }
 
-    const unsupported = await fetch(`${BASE}/api/files?name=payload.zip`, {
+    const zipBytes = Buffer.from("PK\x03\x04archive");
+    const zip = await fetch(`${BASE}/api/files?name=${encodeURIComponent("payload.ZIP")}`, {
       method: "POST",
-      headers: { "content-type": "application/zip" },
+      headers: { "content-type": "application/x-zip-compressed" },
+      body: zipBytes,
+    });
+    expect(zip.status).toBe(201);
+    const zipped = (await zip.json()) as { path: string; name: string; mime: string; bytes: number };
+    expect(zipped).toMatchObject({ name: "payload.zip", mime: "application/x-zip-compressed", bytes: zipBytes.byteLength });
+    expect(zipped.path).toMatch(/[\\/]attachments[\\/][0-9a-f-]+\.zip$/);
+    expect(readFileSync(zipped.path).equals(zipBytes)).toBe(true);
+
+    const unsupported = await fetch(`${BASE}/api/files?name=payload.gz`, {
+      method: "POST",
+      headers: { "content-type": "application/gzip" },
       body: Buffer.from("archive"),
     });
     expect(unsupported.status).toBe(400);

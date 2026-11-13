@@ -54,8 +54,16 @@ const expanded = (id: string) => section(id).querySelector("button[aria-expanded
 
 function type(input: HTMLInputElement, value: string) {
   flushSync(() => {
+    input.focus();
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function rewrite(input: HTMLInputElement, value: string) {
+  flushSync(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: value }));
   });
 }
 
@@ -159,6 +167,50 @@ describe("the keys page", () => {
     expect(row("liveCalls")!.hasAttribute("data-key-highlight")).toBe(true);
     expect(live().getAttribute("aria-label")).toBe("OpenAI API key");
     expect(row("liveCalls")!.textContent).toContain("Live calls use the same key as OpenAI's models");
+  });
+
+  it("empties the search box when the last character is deleted", () => {
+    page();
+    const input = host.querySelector<HTMLInputElement>("[data-keys-search]")!;
+    type(input, "https://api.apikey.fan/v1");
+    expect(input.value).toBe("https://api.apikey.fan/v1");
+    type(input, "https://api.apikey.fan/v");
+    type(input, "");
+    expect(input.value).toBe("");
+  });
+
+  it("ignores a remembered address the browser writes in, and the clear button empties a search", () => {
+    page();
+    const input = host.querySelector<HTMLInputElement>("[data-keys-search]")!;
+    rewrite(input, "https://api.apikey.fan/v1");
+    expect(input.value).toBe("");
+    expect(host.querySelector("[data-keys-empty]")).toBeNull();
+    expect(host.querySelector("[data-keys-search-clear]")).toBeNull();
+
+    input.blur();
+    rewrite(input, "https://api.apikey.fan/v1");
+    expect(input.value).toBe("");
+    expect(rowsShown()).toContain("openai");
+
+    type(input, "https://api.apikey.fan/v1");
+    expect(host.querySelector("[data-keys-empty]")!.textContent).toBe("No keys match “https://api.apikey.fan/v1”.");
+    rewrite(input, "https://api.apikey.fan/v1");
+    expect(input.value).toBe("https://api.apikey.fan/v1");
+    type(input, "");
+    rewrite(input, "https://api.apikey.fan/v1");
+    expect(input.value).toBe("");
+    expect(rowsShown()).toContain("openai");
+
+    type(input, "https://api.apikey.fan/v1");
+    const clear = host.querySelector<HTMLButtonElement>("[data-keys-search-clear]")!;
+    expect(clear.getAttribute("aria-label")).toBe("Clear search");
+    flushSync(() => clear.click());
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(host.querySelector("[data-keys-search-clear]")).toBeNull();
+    expect(rowsShown()).toContain("openai");
+    rewrite(input, "https://api.apikey.fan/v1");
+    expect(input.value).toBe("");
   });
 
   it("clears a search that would hide the row a link asks for", async () => {

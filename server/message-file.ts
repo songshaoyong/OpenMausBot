@@ -367,6 +367,7 @@ export function mimeFor(path: string): string {
     case ".odt": return "application/vnd.oasis.opendocument.text";
     case ".ods": return "application/vnd.oasis.opendocument.spreadsheet";
     case ".odp": return "application/vnd.oasis.opendocument.presentation";
+    case ".zip": return "application/zip";
     default: return "application/octet-stream";
   }
 }

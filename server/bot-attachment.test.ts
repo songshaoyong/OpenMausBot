@@ -57,6 +57,7 @@ describe("saveBotAttachment", () => {
     ["deck.pptx", "pptx", "file", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
     ["book.xlsx", "xlsx", "file", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
     ["table.csv", "csv", "file", "text/csv"],
+    ["bundle.zip", "zip", "file", "application/zip"],
   ];
 
   it.each(cases)("attaches %s as a %s", async (name, _label, kind, mime) => {
@@ -111,7 +112,7 @@ describe("saveBotAttachment", () => {
   });
 
   it("names what is supported when the type is not", async () => {
-    for (const name of ["page.html", "logo.svg", "run.exe", "bundle.zip", "noextension"]) {
+    for (const name of ["page.html", "logo.svg", "run.exe", "bundle.rar", "noextension"]) {
       writeFileSync(join(WORK, name), "x");
       await expect(saveBotAttachment({ path: name, roots: [WORK] }), name).rejects.toMatchObject({
         status: 415,
@@ -198,8 +199,8 @@ describe("saveBotAttachment for a file a turn saved outside its folders", () => 
     const since = Date.now();
     const turn = { roots: [WORK], savedThisTurn: { since, refuse } };
     await expect(saveBotAttachment({ path: DESIGNS, ...turn })).rejects.toMatchObject({ status: 400 });
-    writeFileSync(join(DESIGNS, "bundle.zip"), "PK");
-    await expect(saveBotAttachment({ path: join(DESIGNS, "bundle.zip"), ...turn })).rejects.toMatchObject({ status: 415 });
+    writeFileSync(join(DESIGNS, "bundle.rar"), "Rar");
+    await expect(saveBotAttachment({ path: join(DESIGNS, "bundle.rar"), ...turn })).rejects.toMatchObject({ status: 415 });
     const big = join(DESIGNS, "big.mp4");
     writeFileSync(big, "x");
     truncateSync(big, FILE_MAX_BYTES + 1);

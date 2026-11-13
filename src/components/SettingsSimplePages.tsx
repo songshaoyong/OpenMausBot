@@ -15,7 +15,7 @@ import { AttachmentStorageSettings } from "./AttachmentStorageSettings";
 import { DiagnosticsRow } from "./DiagnosticsRow";
 import { EnginesSettings } from "./EnginesSettings";
 import { LocalComputerSection } from "./LocalComputerSection";
-import { PeopleSection } from "./PeopleSection";
+import { PeopleSection, SignOutRow } from "./PeopleSection";
 import { ActivitySection } from "./ActivitySection";
 import { BuiltInBrowserRow, ServerSitesRow } from "./BrowserSettingsRows";
 import { LoginsSettings } from "./LoginsSettings";
@@ -69,6 +69,7 @@ export function SimpleGeneralPage({ has, peopleOpen, onLooks, onMore }: { has: H
         <SettingsGroup label={t("settings.group.account")} block="general">
           <SettingsRows>
             {has("general") && <ProfileSummaryRow />}
+            {has("general") && <SignOutRow />}
             {has("general") && <CloudPlanRow place="account" />}
             {has("people") && <div data-settings-block="people" className="scroll-mt-4"><PeopleSection simple startOpen={peopleOpen} /></div>}
           </SettingsRows>

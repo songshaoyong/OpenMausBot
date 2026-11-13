@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight, Search, X } from "lucide-react";
 import { useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { scrollParent, scrollWithin } from "@/lib/scroll-within";
@@ -15,6 +15,18 @@ import { KEY_ROW, KeyRow, MaskedKey, RowHeading, type KeyStatus } from "./KeyRow
 
 const CARD = "rounded-xl bg-card in-data-[settings-look=simple]:rounded-[12px] in-data-[settings-look=simple]:border-[0.5px] in-data-[settings-look=simple]:border-(--settings-edge) in-data-[settings-look=simple]:bg-menu";
 const HIGHLIGHT_MS = 1600;
+
+// Chromium autofill writes a remembered address into the box, then puts that address back after it is deleted.
+function browserRewrite(event: { nativeEvent: Event }): boolean {
+  const native = event.nativeEvent;
+  return native instanceof InputEvent && native.inputType === "insertReplacementText";
+}
+
+function revertField(input: HTMLInputElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+  // React keeps its own copy of the field; leaving that copy on the rejected text drops the next keystroke.
+  (input as HTMLInputElement & { _valueTracker?: { setValue: (next: string) => void } })._valueTracker?.setValue(value);
+}
 
 const PANELS: Partial<Record<KeyId, () => ReactNode>> = {
   opencodeProviders: () => <OpenCodeProviderKeys />,
@@ -129,12 +141,22 @@ export function KeysPage() {
       .map((section) => section.id),
   ));
   const pageRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const focus = useKeyFocus();
   const q = query.trim().toLowerCase();
+  const clearSearch = () => {
+    queryRef.current = "";
+    setQuery("");
+    const input = searchRef.current;
+    if (input) revertField(input, "");
+  };
 
   useEffect(() => {
     if (!focus) return;
     const section = KEY_CATALOG.find((entry) => entry.id === focus.row)?.section ?? "ai";
+    queryRef.current = "";
     setQuery("");
     setOpen((current) => current.has(section) ? current : new Set([...current, section]));
     let frame = 0;
@@ -161,22 +183,47 @@ export function KeysPage() {
       <div className="flex h-8 items-center gap-2 rounded-lg bg-ink/[0.05] px-[9px] focus-within:ring-2 focus-within:ring-focus/60">
         <Search size={15} aria-hidden="true" className="shrink-0 text-ink-secondary" />
         <input
+          ref={searchRef}
           data-keys-search
           type="text"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            if (browserRewrite(event) || document.activeElement !== event.currentTarget) {
+              revertField(event.currentTarget, queryRef.current);
+              return;
+            }
+            queryRef.current = event.target.value;
+            setQuery(event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key !== "Escape" || !query) return;
             event.preventDefault();
             event.stopPropagation();
-            setQuery("");
+            clearSearch();
           }}
           placeholder={t("keys.search.placeholder")}
           aria-label={t("keys.search.aria")}
           autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
           spellCheck={false}
+          data-1p-ignore=""
+          data-lpignore="true"
+          data-form-type="other"
           className="w-full min-w-0 bg-transparent text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
         />
+        {query !== "" && (
+          <button
+            type="button"
+            data-keys-search-clear
+            aria-label={t("keys.search.clear")}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => { clearSearch(); searchRef.current?.focus(); }}
+            className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full text-ink-tertiary hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
       </div>
       {sections.length === 0 ? (
         <p data-keys-empty className="px-1 text-[13px] leading-[18px] text-ink-secondary">{t("keys.search.none", { query: query.trim() })}</p>

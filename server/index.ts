@@ -530,6 +530,7 @@ import { applyPendingWorkspaceRestore, readLastWorkspaceRestore, type WorkspaceR
 import { repairMovedWorkspacePaths } from "./moved-paths-repair.ts";
 import { createCustomDomainVerifier, customDomainIpv4, normalizeCustomDomain } from "./custom-domain.ts";
 import { allowedScopes, createEmailSignIn, parseAllowList } from "./account-signin.ts";
+import { createLocalUsers, normalizeEmail, scopesForRole } from "./local-users.ts";
 import { pairingLinkBase, signInMailTarget } from "./pairing-base.ts"; import { lanUrl, listenHost } from "./lan-address.ts";
 import { ProviderAuthSessions } from "./provider-auth-sessions.ts";
 import {
@@ -681,11 +682,22 @@ const signInAllowList = cacheUntilConfigChanges((config) => ({
   admins: parseAllowList(config.signIn?.admins?.join(",")),
   members: parseAllowList(config.signIn?.members?.join(",")),
 }));
+// Accounts the owner made by hand: their password, not an emailed code, decides their role.
+const localUsers = createLocalUsers(DATA_DIR);
+/** Every session signed in as this address ends: a removed account or a new password must not leave one open. */
+const signOutEverywhere = (address: string) => {
+  const email = address.toLowerCase();
+  for (const session of sessions.list()) if (session.email?.toLowerCase() === email) sessions.revoke(session.id);
+};
 const sessions = new SessionRegistry({
   file: join(DATA_DIR, "sessions.json"),
   emailScopesSnapshot: () => {
     const membership = signInAllowList();
-    return (email) => allowedScopes(email, membership);
+    const made = localUsers.list();
+    return (email) => {
+      const own = made.find((user) => user.email === email.toLowerCase());
+      return own ? scopesForRole(own.role) : allowedScopes(email, membership);
+    };
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true, recheckMs: 1_000,
 }); onConfigSaved(() => sessions.membershipChanged());
@@ -12660,6 +12672,35 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       return json(res, 200, { token: result.token, session: result.session, environment });
     }
+    // Password sign-in for an account the owner created: the same session the pairing code opens, with the role
+    // the account carries. Open to anyone, because a wrong password is what it is there to refuse.
+    if (method === "POST" && path === "/api/auth/password") {
+      if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+        return json(res, 415, { error: "send the email and password as JSON (content-type: application/json)" });
+      }
+      const source = requestSource(req);
+      const allowed = sessions.attemptAllowed(source);
+      if (!allowed.ok) return json(res, 429, { error: `Too many wrong passwords. Try again in ${Math.ceil(allowed.retryAfterMs / 60000)} minutes.` });
+      const body = await readBody(req);
+      const email = typeof body?.email === "string" ? normalizeEmail(body.email) : "";
+      const password = typeof body?.password === "string" ? body.password : "";
+      const account = email && password ? localUsers.verify(email, password) : null;
+      if (!account) {
+        sessions.noteFailure(source);
+        console.warn(`password sign-in refused from ${source}`);
+        return json(res, 401, { error: "that email and password do not match an account on this server" });
+      }
+      sessions.clearFailures(source);
+      const issued = sessions.issue({ label: account.email, scopes: scopesForRole(account.role), email: account.email, userId: account.id });
+      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, ...TEAM_LABEL, desktopManaged: DESKTOP_MANAGED, emailSignIn: !CLOUD_HOME && emailSignIn.enabled(), sharedComputers: lendingEnabled(), cloudHome: Boolean(CLOUD_HOME), cloudTeam: CLOUD_TEAM !== null, ownHome: ownHome.takesMove() });
+      if (body?.cookie === true) {
+        const previous = sessions.authenticate(parseCookies(req.headers.cookie).get(SESSION_COOKIE));
+        if (previous && previous.id !== issued.session.id) sessions.revoke(previous.id);
+        const secure = requestOrigin(req)?.startsWith("https://") === true;
+        res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, issued.token, { secure, maxAgeSeconds: cookieMaxAgeSeconds(issued.session) }));
+      }
+      return json(res, 200, { session: issued.session, ...(body?.cookie === true ? {} : { token: issued.token }), environment });
+    }
     // The companion apps' pairing route: same window, lockout and single-use exchange as /api/auth/pair; redeeming the credential IS the sign-in.
     if (method === "POST" && path === "/api/pair") {
       if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
@@ -12774,6 +12815,41 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "POST" && path === "/api/auth/logout") {
       if (auth.kind === "session") sessions.revoke(auth.session.id);
       res.setHeader("set-cookie", clearSessionCookie(SESSION_COOKIE));
+      return json(res, 200, { ok: true });
+    }
+    // Accounts the owner made by hand. Only the owner or an admin reaches these: a member must not add accounts.
+    if (path === "/api/users" || /^\/api\/users\/[^/]+(\/password)?$/.test(path)) {
+      if (!ownerOrAdmin(auth)) return json(res, 403, { error: "only this server's owner or an admin manages accounts" });
+      if (method === "GET" && path === "/api/users") return json(res, 200, { users: localUsers.list() });
+      const made = method === "POST" && path === "/api/users";
+      const reset = /^\/api\/users\/([^/]+)\/password$/.exec(path);
+      const removed = !made && !reset ? /^\/api\/users\/([^/]+)$/.exec(path) : null;
+      if (!made && !reset && !removed) return json(res, 404, { error: "no such account route" });
+      if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const address = made ? "" : decodeURIComponent((reset ?? removed)![1]!);
+      const body = made || reset ? await readBody(req, 4096) : {};
+      if (made) {
+        const email = typeof body?.email === "string" ? body.email : "";
+        const password = typeof body?.password === "string" ? body.password : "";
+        const role = body?.role === "admin" ? "admin" : "member";
+        const added = localUsers.add({ email, password, role });
+        if (!added.ok) return json(res, 400, { error: added.error });
+        console.log(`account added: ${added.user.email} (${added.user.role})`);
+        return json(res, 200, { user: added.user });
+      }
+      if (reset) {
+        const password = typeof body?.password === "string" ? body.password : "";
+        if (password.length < 8) return json(res, 400, { error: "the password needs at least 8 characters" });
+        if (!localUsers.setPassword(address, password)) return json(res, 404, { error: "no account has that address" });
+        signOutEverywhere(address);
+        console.log(`password reset: ${address}`);
+        return json(res, 200, { ok: true });
+      }
+      if (!localUsers.remove(address)) return json(res, 404, { error: "no account has that address" });
+      signOutEverywhere(address);
+      console.log(`account removed: ${address}`);
       return json(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/api/auth/pairing") {

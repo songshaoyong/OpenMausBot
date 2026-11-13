@@ -3676,6 +3676,7 @@
   "keys.search.placeholder": "キーを検索",
   "keys.search.aria": "API キーを検索",
   "keys.search.none": "「{query}」に一致するキーはありません。",
+  "keys.search.clear": "検索をクリア",
   "keys.openPage": "API キーを開く",
   "engineSetup.apiKey.inline": "ここに貼り付けてください。自動で保存・確認され、モデルがここに表示されます。",
   "commandPalette.searchLabel": "ボット、グループチャット、メッセージを検索",

@@ -69,7 +69,7 @@ const IMAGE_MIMES: Record<string, string> = {
   "image/webp": ".webp",
 };
 
-/** No archives, binaries, HTML, SVG or scripts. The claimed mime picks the extension; an attacker's filename never does. */
+/** Zip is stored whole and never unpacked. Other archives, binaries, HTML, SVG and scripts stay out. The claimed mime picks the extension; an attacker's filename never does. */
 const FILE_MIMES: Readonly<Record<string, string>> = {
   "video/mp4": ".mp4",
   "video/webm": ".webm",
@@ -103,6 +103,9 @@ const FILE_MIMES: Readonly<Record<string, string>> = {
   "application/vnd.oasis.opendocument.text": ".odt",
   "application/vnd.oasis.opendocument.spreadsheet": ".ods",
   "application/vnd.oasis.opendocument.presentation": ".odp",
+  "application/zip": ".zip",
+  "application/x-zip": ".zip",
+  "application/x-zip-compressed": ".zip",
 };
 
 export function extensionForMime(mime: string | undefined): string | null {

@@ -138,7 +138,7 @@ export function imagesThatFit<T extends { name: string; size: number }>(images: 
   return kept;
 }
 
-const ARCHIVE_NAME = /\.(?:zip|rar|7z|tar|gz|tgz|bz2|xz)$/i;
+const ARCHIVE_NAME = /\.(?:rar|7z|tar|gz|tgz|bz2|xz)$/i;
 
 export type AttachProblem =
   | { kind: "too-large"; name: string; limitMb: number }
@@ -178,6 +178,7 @@ const DOCUMENT_MIMES: Readonly<Record<string, string>> = {
   odt: "application/vnd.oasis.opendocument.text",
   ods: "application/vnd.oasis.opendocument.spreadsheet",
   odp: "application/vnd.oasis.opendocument.presentation",
+  zip: "application/zip",
 };
 
 const ACCEPTED_DOCUMENT_MIMES = new Set(Object.values(DOCUMENT_MIMES));
@@ -199,8 +200,12 @@ const ACCEPTED_AUDIO_MIMES = new Set([
 
 export function documentMime(file: Pick<File, "name" | "type">): string | null {
   const declared = file.type.split(";", 1)[0]!.trim().toLowerCase();
-  if (ACCEPTED_DOCUMENT_MIMES.has(declared)) return declared;
   const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
+  // Windows reports a zip as application/x-zip-compressed.
+  if (extension === "zip" || declared === "application/zip" || declared === "application/x-zip" || declared === "application/x-zip-compressed") {
+    return "application/zip";
+  }
+  if (ACCEPTED_DOCUMENT_MIMES.has(declared)) return declared;
   return DOCUMENT_MIMES[extension] ?? null;
 }
 

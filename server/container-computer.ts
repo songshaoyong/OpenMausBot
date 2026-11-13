@@ -190,6 +190,8 @@ export async function sh(cmd: string, args: string[], timeout = 8000): Promise<{
     timeout,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
+    // Without this every podman/docker call flashed a console window on Windows, once per screen poll.
+    windowsHide: true,
     env: { ...process.env, PATH: augmentedPath() },
   });
   return { stdout };

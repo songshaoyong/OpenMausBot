@@ -1,0 +1,10 @@
+
+> openmausbot@0.1.150 typecheck E:\projecte\OpenMausBot
+> tsc -b && tsc -p tsconfig.server.json
+
+
+> openmausbot@0.1.150 lint E:\projecte\OpenMausBot
+> oxlint --deny-warnings .
+
+Found 0 warnings and 0 errors.
+Finished in 368ms on 5791 files using 16 threads.
