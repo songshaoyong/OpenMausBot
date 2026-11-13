@@ -377,7 +377,8 @@ export async function fileAttachmentFromFile(file: File): Promise<FileAttachment
     {
       method: "POST",
       headers: { "content-type": mime },
-      body: file,
+      // Chromium uses a Blob's own type as Content-Type and can replace this header.
+      body: declared === mime ? file : file.slice(0, file.size, mime),
     },
   );
   return fileAttachment(saved.name || file.name, saved.path, saved.bytes);

@@ -48,3 +48,32 @@ export function attachmentsForBox(text: string, cwd: string | undefined, boxed =
     return `${open}${escapeAttribute(target)}${close}`;
   });
 }
+
+/**
+ * The Local VM bind-mounts only its workspace, so a host attachment path is invisible to vm_exec.
+ * The upload is copied, not linked: that workspace is writable, and a link would let the guest change the stored file.
+ * The tag's path becomes the guest path. Only the text sent to the engine changes.
+ */
+export function attachmentsForVm(text: string, workspaceDir: string, guestRoot: string, attachmentsDir = ATTACHMENTS_DIR): string {
+  if (!text.includes("<attached-")) return text;
+  const uploads = resolve(attachmentsDir);
+  const workspace = resolve(workspaceDir);
+  const guest = guestRoot.replace(/\/+$/, "");
+  return text.replace(TAG, (tag, open: string, raw: string, close: string) => {
+    const path = decodeAttachmentAttribute(raw), name = basename(path);
+    if (resolve(dirname(path)) !== uploads || !NAME.test(name) || !existsSync(path)) return tag;
+    const target = join(workspace, name);
+    const partial = `${target}.${process.pid}.partial`;
+    try {
+      if (!existsSync(target)) {
+        mkdirSync(workspace, { recursive: true, mode: 0o700 });
+        copyFileSync(path, partial, constants.COPYFILE_FICLONE);
+        renameSync(partial, target);
+      }
+    } catch {
+      rmSync(partial, { force: true });
+      if (!existsSync(target)) return tag;
+    }
+    return `${open}${escapeAttribute(`${guest}/${name}`)}${close}`;
+  });
+}

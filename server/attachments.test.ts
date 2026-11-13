@@ -557,6 +557,15 @@ describe("shared files", () => {
     expect(() => sanitizeSharedFileName("notes.txt", "application/gzip")).toThrow(/supported document/);
   });
 
+  it("stores a zip the browser labels as a generic binary", async () => {
+    const bytes = Buffer.from("PK\x03\x04toyota");
+    const saved = await saveFile((async function* () { yield bytes; })(), "toyota-ops-console.zip", "application/octet-stream");
+    expect(saved).toMatchObject({ name: "toyota-ops-console.zip", mime: "application/zip", bytes: bytes.byteLength });
+    expect(saved.path.endsWith(".zip")).toBe(true);
+    expect(readFileSync(saved.path).equals(bytes)).toBe(true);
+    await expect(saveFile((async function* () { yield Buffer.from("x"); })(), "run.exe", "")).rejects.toThrow(/supported document/);
+  });
+
   it("streams a file under a generated name with private permissions", async () => {
     async function* chunks() {
       yield Buffer.from("first ");

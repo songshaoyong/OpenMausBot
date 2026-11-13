@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { boxUploadsDir, planBox } from "./bot-box/plan.ts";
-import { attachmentsForBox } from "./box-attachments.ts";
+import { attachmentsForBox, attachmentsForVm } from "./box-attachments.ts";
 
 describe("attachmentsForBox", () => {
   let root: string, dataDir: string, uploads: string, cwd: string, shown: string;
@@ -81,5 +81,41 @@ describe("attachmentsForBox", () => {
     expect(plan.mounts[at]).toEqual({ kind: "ro", source: shown, target: shown, optional: true });
     expect(at).toBeGreaterThan(targets(cwd).indexOf(cwd));
     expect(targets(join(dataDir, "task-workspaces", "bot", "other"))).not.toContain(shown);
+  });
+});
+
+describe("attachmentsForVm", () => {
+  let root: string, uploads: string, workspace: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "vm-attachments-"));
+    uploads = join(root, "attachments");
+    workspace = join(root, "vm-home");
+    mkdirSync(uploads, { recursive: true });
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("copies an upload into the VM workspace and points the engine at the guest path", () => {
+    const name = "969ec2ad-1111-4111-8111-111111111111.zip";
+    const upload = join(uploads, name);
+    writeFileSync(upload, "PK zip");
+    const text = `<attached-file path="${upload}" name="toyota-ops-console.zip" />`;
+    expect(attachmentsForVm(text, workspace, "/home/cua/workspace/", uploads))
+      .toBe(`<attached-file path="/home/cua/workspace/${name}" name="toyota-ops-console.zip" />`);
+    expect(readFileSync(join(workspace, name), "utf8")).toBe("PK zip");
+    writeFileSync(join(workspace, name), "changed by the guest");
+    expect(readFileSync(upload, "utf8")).toBe("PK zip");
+    expect(attachmentsForVm(text, workspace, "/home/cua/workspace", uploads))
+      .toBe(`<attached-file path="/home/cua/workspace/${name}" name="toyota-ops-console.zip" />`);
+    expect(readFileSync(join(workspace, name), "utf8")).toBe("changed by the guest");
+  });
+
+  it("leaves a path outside the attachment store, and a missing upload, unchanged", () => {
+    writeFileSync(join(root, "elsewhere.zip"), "x");
+    const text = [
+      `<attached-file path="${join(root, "elsewhere.zip")}" name="elsewhere.zip" />`,
+      `<attached-file path="${join(uploads, "missing.zip")}" name="missing.zip" />`,
+    ].join("\n");
+    expect(attachmentsForVm(text, workspace, "/home/cua/workspace", uploads)).toBe(text);
+    expect(existsSync(workspace)).toBe(false);
   });
 });

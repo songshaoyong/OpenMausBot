@@ -506,8 +506,11 @@ describe("private document intake", () => {
       await expect(fileAttachmentFromFile(file)).resolves.toMatchObject({
         kind: "file", name, path: "/private/attachments/recording.opus", size: 3,
       });
-      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/files\?/),
-        expect.objectContaining({ method: "POST", body: file, headers: { "content-type": mime } }));
+      const init = fetch.mock.calls[0]?.[1] as RequestInit;
+      expect(init.method).toBe("POST");
+      expect(init.headers).toEqual({ "content-type": mime });
+      expect(init.body).toBeInstanceOf(Blob);
+      expect((init.body as Blob).type.split(";", 1)[0]).toBe(mime);
     } finally {
       fetch.mockRestore();
     }
@@ -547,6 +550,22 @@ describe("private document intake", () => {
     expect(documentMime({ name: "archive.zip", type: "application/zip" })).toBe("application/zip");
     expect(documentMime({ name: "ARCHIVE.ZIP", type: "application/x-zip-compressed" })).toBe("application/zip");
     expect(documentMime({ name: "notes.bin", type: "application/zip" })).toBe("application/zip");
+  });
+
+  it("uploads a zip the browser calls a generic binary with a zip content-type", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      path: "/private/attachments/bundle.zip", name: "toyota-ops-console.zip", bytes: 4,
+    }), { status: 201, headers: { "content-type": "application/json" } }));
+    try {
+      const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "toyota-ops-console.zip", { type: "application/octet-stream" });
+      await expect(fileAttachmentFromFile(file)).resolves.toMatchObject({ kind: "file", name: "toyota-ops-console.zip" });
+      const init = fetch.mock.calls[0]?.[1] as RequestInit;
+      expect(init.headers).toEqual({ "content-type": "application/zip" });
+      expect(init.body).toBeInstanceOf(Blob);
+      expect((init.body as Blob).type).toBe("application/zip");
+    } finally {
+      fetch.mockRestore();
+    }
   });
 
   it("uses the server path and safe name returned by the private store", async () => {

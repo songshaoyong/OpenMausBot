@@ -393,8 +393,17 @@ function statusError(status: number, message: string): Error & { status: number 
 }
 
 function normalizedMime(mime: string | undefined): string | null {
-  const value = mime?.split(";")[0]?.trim().toLowerCase();
+  const value = mime?.split(";")[0]?.split(",")[0]?.trim().toLowerCase();
   return value || null;
+}
+
+/** A browser often labels a zip application/octet-stream. The name selects zip only; every other type still comes from the claimed mime. */
+function mimeForUpload(name: string, mime: string | undefined): string | null {
+  const value = normalizedMime(mime);
+  if (value && FILE_MIMES[value]) return value;
+  const leaf = name.normalize("NFKC").trim().split(/[\\/]/).pop() ?? "";
+  if (leaf.toLowerCase().endsWith(".zip")) return "application/zip";
+  return value;
 }
 
 export function extensionForFileMime(mime: string | undefined): string | null {
@@ -437,7 +446,7 @@ export async function saveFile(
   mime: string,
   options: { uploadId?: string; expectedBytes?: number } = {},
 ): Promise<SavedFile> {
-  const normalized = normalizedMime(mime);
+  const normalized = mimeForUpload(originalName, mime);
   if (!normalized || !extensionForFileMime(normalized)) {
     throw statusError(400, "content-type must be a supported document or audio type");
   }
