@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, BellDot, Check, CheckCheck, ChevronRight, ClipboardCopy, Copy, Crown, FolderMinus, FolderOpen, FolderPlus, Loader2, MessagesSquare, MoreHorizontal, Pencil, Pin, PinOff, SquarePen, Star, Trash2, Users } from "lucide-react";
+import { Archive, BellDot, Check, CheckCheck, ChevronRight, ClipboardCopy, Copy, Crown, FolderMinus, FolderOpen, FolderPlus, Loader2, MessagesSquare, MoreHorizontal, Pause, Pencil, Pin, PinOff, Play, SquarePen, Star, Trash2, Users } from "lucide-react";
+import { isBotHeld, isEveryBotPaused, isPausedHere, setEveryBotPaused, setPaused } from "@/lib/bot-pause";
 import { api, useStore, openBot, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useHeldMenuMotion } from "./MenuMotion";
 import { t } from "@/lib/i18n";
 import { copyText } from "@/lib/copy-text";
 import { allThreadRows, BotDeleteMenuItem, useDeleteAllThreads } from "./BotMenuDelete";
-import { HideDefaultBotItem } from "./DefaultBotControls";
+import { DemoteDefaultBotItem, HideDefaultBotItem } from "./DefaultBotControls";
 import { navigateThreadMenu } from "./BotProjects";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { userBotMenu } from "@/lib/own-team-bot";
@@ -262,8 +263,19 @@ export function BotContextMenu({
         { disabled: readingBotId !== null, keepOpen: true },
       )
       : item(<BellDot size={16} className="text-ink-secondary" />, t("sidebar.bot.simple.markUnread"), () => dispatch({ type: "markUnread", botId: bot.id }));
+    // Only the owner or an admin pauses; a bot paused with its department is resumed from the department's menu.
+    const pausedHere = isPausedHere(state.config, "bot", bot.id), everyBotPaused = isEveryBotPaused(state.config);
+    const pause = admin !== true ? null : item(pausedHere ? <Play size={16} className="text-ink-secondary" /> : <Pause size={16} className="text-ink-secondary" />,
+      t(pausedHere ? "pause.resumeBot" : "pause.pauseBot"),
+      () => { void setPaused("bot", bot.id, !pausedHere).catch((error: unknown) => dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) })); },
+      !pausedHere && isBotHeld(state.config, bot.id) ? { disabled: true, hint: t(everyBotPaused ? "pause.byAll" : "pause.byDepartment") } : undefined);
+    const pauseAll = admin !== true ? null : item(everyBotPaused ? <Play size={16} className="text-ink-secondary" /> : <Pause size={16} className="text-ink-secondary" />,
+      t(everyBotPaused ? "pause.resumeAll" : "pause.pauseAll"),
+      () => { void setEveryBotPaused(!everyBotPaused).catch((error: unknown) => dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) })); });
     const moreItems = remoteClient ? [editProfile, owner, ...deleteAll] : [
       editProfile,
+      pause,
+      pauseAll,
       team ? null : chiefItem(),
       member && !ownEdit ? null : item(<Copy size={16} className="text-ink-secondary" />, t("sidebar.bot.duplicate"), () => dispatch({ type: "duplicateBot", botId: bot.id })),
       owner,
@@ -285,7 +297,7 @@ export function BotContextMenu({
     );
     const threads = [divider("threads"), newThread, viewThreads, setMain];
     const moreRow = flyoutButton("more", moreRef, <MoreHorizontal size={16} className="text-ink-secondary" />, t("sidebar.bot.more"));
-    const leave = bot.defaultBot ? [<HideDefaultBotItem key="hide" bot={bot} onDone={onClose} className={MENU_ITEM} />] : member ? ownDelete() : [
+    const leave = bot.defaultBot ? [<HideDefaultBotItem key="hide" bot={bot} onDone={onClose} className={MENU_ITEM} />, ...(member ? [] : [<DemoteDefaultBotItem key="demote" bot={bot} onDone={onClose} className={MENU_ITEM} />])] : member ? ownDelete() : [
       item(<Archive size={16} className="text-ink-secondary" />, t("sidebar.bot.archive"), () => onArchive(bot), { disabled: archiveBlocked, hint: archiveHint }),
       <BotDeleteMenuItem key="delete" deleting={deleting} className={MENU_ITEM} onClick={() => { onClose(); onDelete(bot); }} />,
     ];
@@ -294,7 +306,7 @@ export function BotContextMenu({
         ref={menuRef}
         data-bot-menu
         data-sidebar
-        role="menu"
+        role="menu" data-look="menu"
         aria-label={t("sidebar.bot.actions", { name: bot.name })}
         onKeyDown={navigateThreadMenu}
         onPointerOver={(event) => {
@@ -340,7 +352,7 @@ export function BotContextMenu({
         data-bot-menu
         data-bot-menu-flyout={flyout}
         data-sidebar
-        role="menu"
+        role="menu" data-look="menu"
         aria-label={flyout === "more" ? t("sidebar.bot.more") : t("sidebar.bot.moveToSection")}
         onPointerEnter={() => { more.enterSubmenu(); setMoreEngaged(true); }}
         onPointerLeave={() => setMoreEngaged(false)}
@@ -371,7 +383,7 @@ export function BotContextMenu({
       ref={menuRef}
       data-bot-menu
       data-sidebar
-      role="menu"
+      role="menu" data-look="menu"
       aria-label={t("sidebar.bot.actions", { name: bot.name })}
       onKeyDown={navigateThreadMenu}
       style={{ top: shown.y, left: shown.x }}
@@ -430,7 +442,7 @@ export function BotContextMenu({
           void copyText(bot.threadId);
         }),
         divider("d3"), ...moveToTeam.items(bot, item), ...moveToCloud.items(bot, item),
-        ...(bot.defaultBot ? [<HideDefaultBotItem key="hide" bot={bot} onDone={onClose} className={MENU_ITEM} />] : member ? ownDelete() : [
+        ...(bot.defaultBot ? [<HideDefaultBotItem key="hide" bot={bot} onDone={onClose} className={MENU_ITEM} />, ...(member ? [] : [<DemoteDefaultBotItem key="demote" bot={bot} onDone={onClose} className={MENU_ITEM} />])] : member ? ownDelete() : [
           item(<Archive size={16} className="text-ink-secondary" />, t("sidebar.bot.archive"), () => onArchive(bot), { disabled: archiveBlocked, hint: archiveHint }),
           <BotDeleteMenuItem key="delete" deleting={deleting} className={MENU_ITEM} onClick={() => { onClose(); onDelete(bot); }} />,
         ]),

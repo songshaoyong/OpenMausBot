@@ -1687,7 +1687,6 @@ body {
 /* Settings: cards and fields edge in one faint ink line. In Midnight and Daylight the sheet is opaque, in the page
    colour, with no shadow; every other skin keeps its glass. */
 [data-settings-look] {
-  --settings-sheet: var(--color-menu);
   --settings-edge: color-mix(in srgb, var(--color-ink) 10%, transparent);
   --switch-on: var(--color-accent);
   --switch-knob-on: #fff;
@@ -1698,7 +1697,6 @@ body {
   --switch-outline: color-mix(in srgb, var(--color-ink) 40%, transparent);
 }
 :root:is([data-skin="midnight"], [data-skin="daylight"]) [data-settings-look] {
-  --settings-sheet: var(--color-app);
   --switch-on: var(--color-ink);
   --switch-knob-on: var(--color-app);
 }
@@ -3615,3 +3613,12 @@ button:disabled.bg-danger {
 .trace-step-box { background: color-mix(in srgb, #8b7cf6 14%, var(--color-card)); border-color: color-mix(in srgb, #8b7cf6 30%, var(--color-card)); }
 .trace-step-ink { color: color-mix(in srgb, #7c6cf0 85%, var(--color-ink)); }
 .trace-tool-ink { color: color-mix(in srgb, #1f9a8c 80%, var(--color-ink)); }
+
+.fade-end {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.fade-end:dir(rtl) {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+}

@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR, ensureDirs, instanceConfigs, NATIVE_DIR, type AppConfig } from "../config.ts";
-import { TurnAuthenticationRefusedError, type ProviderInstance } from "../contracts.ts";
+import { TurnAuthenticationRefusedError, type ProviderInstance, type SendTurnInput } from "../contracts.ts";
+import { UNGATED_MCP_OUTPUT_TOKENS } from "../mcp-gate-config.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { BACKGROUND_CALL_TIMEOUT_MS, BACKGROUND_SETTINGS, backgroundCallArgs } from "./claude-background.ts";
 import {
@@ -29,6 +30,7 @@ import {
   turnCostFromRunningTotal,
   type ClaudeConfig,
 } from "./claude.ts";
+import { spawnContractDiff } from "./claude-spawn-contract.ts";
 import { TEAM_TOOLS_FAILED } from "./team-tools.ts";
 import { claudeLimitMessage } from "./claude-limits.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
@@ -38,6 +40,7 @@ import { ephemeralWorkspaceTokenPath } from "../workspace-backup-policy.ts";
 import { registerPathDir, resetPathCacheForTests } from "../env-path.ts";
 import * as procs from "../procs.ts";
 import * as localInject from "./local-inject.ts";
+import { DEFER_TOOLS_ENV } from "./agents-claude-defer.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-claude-cli.ts");
 const dumpedPid = (dump: string): number => JSON.parse(readFileSync(dump, "utf8")).pid;
@@ -268,10 +271,12 @@ describe("ClaudeDriver.decodeConfig", () => {
     const pidPath = join(home, "logout-pid");
     writeFileSync(cli, [
       "#!/usr/bin/env node",
-      'import { writeFileSync } from "node:fs";',
+      'import { renameSync, writeFileSync } from "node:fs";',
       'import { join } from "node:path";',
       'if (process.argv.slice(2).join(" ") !== "auth logout") process.exit(2);',
-      'writeFileSync(join(process.env.HOME, "logout-pid"), String(process.pid));',
+      'const marker = join(process.env.HOME, "logout-pid");',
+      'writeFileSync(marker + ".tmp", String(process.pid));',
+      'renameSync(marker + ".tmp", marker);',
       'setInterval(() => {}, 1000);',
     ].join("\n"), { mode: 0o700 });
     const instance = await ClaudeDriver.create({
@@ -283,7 +288,7 @@ describe("ClaudeDriver.decodeConfig", () => {
     let pid: number | undefined;
     const alive = (value: number) => { try { process.kill(value, 0); return true; } catch { return false; } };
     try {
-      await expect.poll(() => existsSync(pidPath), { timeout: 2500 }).toBe(true);
+      await expect.poll(() => existsSync(pidPath), { timeout: 10_000 }).toBe(true);
       pid = Number(readFileSync(pidPath, "utf8"));
       await instance.dispose();
       expect(alive(pid)).toBe(false);
@@ -293,8 +298,8 @@ describe("ClaudeDriver.decodeConfig", () => {
         if (process.platform === "win32") process.kill(pid, "SIGKILL");
         else process.kill(-pid, "SIGKILL");
       }
-      await pending;
       await instance.dispose();
+      await pending;
       await removeTempDir(home);
     }
   }, 60_000);
@@ -408,6 +413,53 @@ describe("ClaudeDriver.decodeConfig", () => {
       }
     },
   );
+});
+
+describe("spawnContractDiff", () => {
+  const key = (overrides: Record<string, unknown> = {}) => JSON.stringify({
+    args: ["--model", "opus"],
+    system: "stable",
+    mcpServers: { agents: { command: "node", args: ["agents"], env: { TOKEN: "secret" } } },
+    cwd: "/work",
+    model: "opus",
+    base: null,
+    configDir: null,
+    hooks: false,
+    toolSearch: false,
+    botSettings: "aaa",
+    auth: "bbb",
+    ...overrides,
+  });
+
+  it("reports nothing for identical keys", () => {
+    expect(spawnContractDiff(key(), key())).toEqual([]);
+  });
+
+  it("names changed scalar fields", () => {
+    expect(spawnContractDiff(key(), key({ model: "sonnet" }))).toEqual(["model"]);
+  });
+
+  it("names added and removed MCP servers without their configs", () => {
+    expect(spawnContractDiff(key(), key({ mcpServers: {} }))).toEqual(["mcpServers:-agents"]);
+    expect(spawnContractDiff(key({ mcpServers: {} }), key())).toEqual(["mcpServers:+agents"]);
+  });
+
+  it("names a server whose config changed, not the config", () => {
+    const changed = spawnContractDiff(key(), key({ mcpServers: { agents: { command: "node", args: ["agents"], env: { TOKEN: "rotated" } } } }));
+    expect(changed).toEqual(["mcpServers:~agents"]);
+    expect(JSON.stringify(changed)).not.toContain("rotated");
+  });
+
+  it("reports nothing for unparseable keys", () => {
+    expect(spawnContractDiff("not json", key())).toEqual([]);
+    expect(spawnContractDiff(key(), "{")).toEqual([]);
+  });
+
+  it("names a server called constructor, which Object.prototype also has", () => {
+    const withConstructor = { constructor: { command: "node", args: ["ctor"] } };
+    expect(spawnContractDiff(key({ mcpServers: {} }), key({ mcpServers: withConstructor }))).toEqual(["mcpServers:+constructor"]);
+    expect(spawnContractDiff(key({ mcpServers: withConstructor }), key({ mcpServers: {} }))).toEqual(["mcpServers:-constructor"]);
+  });
 });
 
 describe("ClaudeDriver turns (fake CLI)", () => {
@@ -1289,7 +1341,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
         agents: {
           command: process.execPath,
           args: ["/fake/agents-proxy.js"],
-          env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok", OMB_TURN_DEPTH: "0" },
+          env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
         },
       },
     });
@@ -1299,8 +1351,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.mcpConfig.mcpServers.agents).toMatchObject({
       alwaysLoad: true,
       args: ["/fake/agents-proxy.js"],
-      env: { OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
+      env: { OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok", [DEFER_TOOLS_ENV]: "1" },
     });
+    expect(seen.env.CLAUDE_CODE_DISABLE_CRON, "a deferred trigger must not lose to CronCreate").toBe("1");
     expect(JSON.stringify(seen.argv)).not.toContain("tok");
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
@@ -1644,6 +1697,45 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       expect(seen.settings.claudeMdExcludes).toEqual([join(homedir(), ".claude", "CLAUDE.md")]);
     });
 
+    it("keeps an MCP output limit the bot's settings set instead of the automatic one", async () => {
+      const dump = join(scratch, "bot-settings-mcp-limit.json");
+      process.env.FAKE_CLAUDE_DUMP = dump;
+      await create();
+      const { thread, file } = botFolders("mcp-limit", { env: { MAX_MCP_OUTPUT_TOKENS: "40000" } });
+      await instance.adapter.sendTurn({ threadId: "t-bot-settings-mcp-limit", text: "hi", cwd: thread, botSettingsFile: file,
+        integrations: { custom: { docs: { type: "http", url: "https://docs.example/mcp", headers: {} } } } });
+      await recorder.until((e) => e.type === "turn.completed");
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.env.MAX_MCP_OUTPUT_TOKENS).toBeUndefined();
+      expect(seen.settings.env.MAX_MCP_OUTPUT_TOKENS).toBe("40000");
+    });
+
+    it("keeps an MCP output limit set in the turn's own folder, which Claude Code reads itself", async () => {
+      const dump = join(scratch, "bot-settings-own-mcp-limit.json");
+      process.env.FAKE_CLAUDE_DUMP = dump;
+      await create();
+      const { bot, file } = botFolders("own-mcp-limit", { env: { MAX_MCP_OUTPUT_TOKENS: "40000" } });
+      await instance.adapter.sendTurn({ threadId: "t-bot-settings-own-mcp-limit", text: "hi", cwd: bot, botSettingsFile: file,
+        integrations: { custom: { docs: { type: "http", url: "https://docs.example/mcp", headers: {} } } } });
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(JSON.parse(readFileSync(dump, "utf8")).env.MAX_MCP_OUTPUT_TOKENS).toBeUndefined();
+    });
+
+    it("skips the folder's settings.local.json limit when the launch loads project settings only", async () => {
+      const dump = join(scratch, "bot-settings-local-mcp-limit.json");
+      process.env.FAKE_CLAUDE_DUMP = dump;
+      await create();
+      const { bot, file } = botFolders("local-mcp-limit", {});
+      writeFileSync(join(bot, ".claude", "settings.local.json"), JSON.stringify({ env: { MAX_MCP_OUTPUT_TOKENS: "40000" } }));
+      await instance.adapter.sendTurn({ threadId: "t-bot-settings-local-mcp-limit", text: "hi", cwd: bot, botSettingsFile: file,
+        integrations: { custom: { docs: { type: "http", url: "https://docs.example/mcp", headers: {} } } } });
+      await recorder.until((e) => e.type === "turn.completed");
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      // --setting-sources project leaves settings.local.json out, so its limit never reaches the CLI.
+      expect(seen.argv[seen.argv.indexOf("--setting-sources") + 1]).toBe("project");
+      expect(seen.env.MAX_MCP_OUTPUT_TOKENS).toBe(String(UNGATED_MCP_OUTPUT_TOKENS));
+    });
+
     it("is left to Claude Code when the turn runs in the folder that holds it", async () => {
       const dump = join(scratch, "bot-settings-own-folder.json");
       process.env.FAKE_CLAUDE_DUMP = dump;
@@ -1766,6 +1858,28 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.mcpConfig.mcpServers.legacy).toEqual({ type: "sse", url: "https://old.example/sse", headers: {} });
     expect(JSON.stringify(seen.mcpConfig)).not.toContain("mcp-remote-proxy");
     expect(JSON.stringify(seen.argv)).not.toContain("tok-docs");
+  });
+
+  it("has the CLI save a big result from a bot's URL server to a file instead of the thread", async () => {
+    await create();
+    const dump = join(scratch, "ungated-mcp.json");
+    process.env.FAKE_CLAUDE_DUMP = dump;
+    const docs = { type: "http" as const, url: "https://docs.example/mcp", headers: {} };
+    const turn = async (threadId: string, integrations: SendTurnInput["integrations"]) => {
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "hi", integrations });
+      await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      return JSON.parse(readFileSync(dump, "utf8")).env.MAX_MCP_OUTPUT_TOKENS;
+    };
+
+    expect(await turn("t-ungated-url", { custom: { docs } })).toBe(String(UNGATED_MCP_OUTPUT_TOKENS));
+    // The gate already trims a command server and a URL server with a limit of its own; a limit of 0 asks for whole payloads.
+    expect(await turn("t-gated-cmd", { custom: { shop: { command: "npx", args: ["shop"], env: {} } } })).toBeUndefined();
+    expect(await turn("t-gated-url", { custom: { docs }, customResultBudgets: { docs: 4000 } })).toBeUndefined();
+    expect(await turn("t-whole-url", { custom: { docs }, customResultBudgets: { docs: 0 } })).toBeUndefined();
+    expect(await turn("t-no-custom", {})).toBeUndefined();
+    // The limit is part of the warm process's contract: changing a server's limit on the same thread starts a fresh process.
+    expect(await turn("t-ungated-url", { custom: { docs }, customResultBudgets: { docs: 0 } })).toBeUndefined();
+    expect(await turn("t-ungated-url", { custom: { docs } })).toBe(String(UNGATED_MCP_OUTPUT_TOKENS));
   });
 
   // Claude Code advertises no MCP Apps UI extension and keeps tool results to itself, so only OMB's
@@ -1915,18 +2029,20 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const turn = async (text: string, cwd?: string) => {
       const { turnId } = await instance.adapter.sendTurn({
         threadId: "t-tool-search-off", text, ...(cwd ? { cwd } : {}),
-        integrations: { composio: { command: process.execPath, args: ["/fake/composio.js"], env: {} } },
+        integrations: { composio: { command: process.execPath, args: ["/fake/composio.js"], env: {} }, agents: { command: process.execPath, args: ["/fake/agents.js"], env: {} } },
       });
       await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
-      return JSON.parse(readFileSync(dump, "utf8")) as { pid: number; settings: { env: Record<string, string> } };
+      return JSON.parse(readFileSync(dump, "utf8")) as { pid: number; settings: { env: Record<string, string> }; mcpConfig: { mcpServers: Record<string, { alwaysLoad?: boolean; env?: Record<string, string> }> } };
     };
 
     // The turn leaves the account's settings out (--setting-sources project), so the choice travels in --settings.
     const off = await turn("hi");
     expect(off.settings.env.ENABLE_TOOL_SEARCH).toBe("false");
+    expect(off.mcpConfig.mcpServers.agents, "without tool search every agents tool loads whole, as before").toEqual({ command: process.execPath, args: ["/fake/agents.js"], env: {}, alwaysLoad: true });
     writeFileSync(path, JSON.stringify({ env: { ENABLE_TOOL_SEARCH: "auto" } }));
     const on = await turn("again");
     expect(on.settings.env.ENABLE_TOOL_SEARCH).toBe("true");
+    expect(on.mcpConfig.mcpServers.agents).toEqual({ command: process.execPath, args: ["/fake/agents.js"], env: { [DEFER_TOOLS_ENV]: "1" }, alwaysLoad: true });
     expect(on.pid).not.toBe(off.pid);
     // The bot's project settings beat the account's.
     const project = join(scratch, "project-off");
@@ -2574,7 +2690,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
         agents: {
           command: process.execPath,
           args: ["/fake/agents-proxy.js"],
-          env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok", OMB_TURN_DEPTH: "0" },
+          env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
         },
       },
     });
@@ -3534,6 +3650,48 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(dump.argv).toContain("--resume");
     expect(dump.argv).toContain("claude-other");
   });
+
+  it("names the changed contract fields when a warm process is replaced", async () => {
+    await create();
+    await instance.adapter.sendTurn({
+      threadId: "t-contract-diff",
+      text: "one",
+      integrations: { agents: { command: "node", args: ["agents"], env: {} } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const announced = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
+    const second = await instance.adapter.sendTurn({
+      threadId: "t-contract-diff",
+      text: "two",
+      resumeCursor: announced,
+    });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
+    // The native log flushes after the turn; poll for the close line instead of sleeping.
+    const close = await new Promise<{ contractChanged?: string[] }>((resolve, reject) => {
+      const deadline = Date.now() + 10_000;
+      const log = join(NATIVE_DIR, "t-contract-diff.ndjson");
+      const check = () => {
+        if (Date.now() > deadline) return reject(new Error("contract-change close was never logged"));
+        try {
+          const lines = readFileSync(log, "utf8").split("\n").filter(Boolean);
+          for (const line of lines) {
+            let entry: { msg?: { close?: string; contractChanged?: string[] } };
+            try {
+              entry = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (entry.msg?.close === "spawn contract changed" && entry.msg.contractChanged) return resolve(entry.msg);
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return reject(error);
+        }
+        setTimeout(check, 50);
+      };
+      check();
+    });
+    expect(close.contractChanged).toContain("mcpServers:-agents");
+  }, 20_000);
 
   it("closes an idle session after the configured window", async () => {
     // Ten seconds is the floor; poll the native log for the close instead of sleeping past it.

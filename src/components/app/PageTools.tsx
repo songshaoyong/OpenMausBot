@@ -18,6 +18,7 @@ import type { PublishedPageCard } from "../../../shared/published-page";
 import { canonicalDownloadFilename } from "../AttachmentPreview";
 import { appDownloadPath, publishAppPage, unpublishPage } from "./app-api";
 import { AppFrame, type AppFrameHandle } from "./AppFrame";
+import type { AppSelection } from "./app-frame-host";
 import { ASK_CHIP, ASK_CHIP_IDLE, ASK_CHIP_PICKED, ASK_PRIMARY_BUTTON } from "../AskCard";
 
 /** A page starts at this height in the chat and grows to its content up to the cap, then scrolls inside. */
@@ -205,7 +206,7 @@ export interface PageToolsProps {
   ready: boolean;
   /** pane: the page opens in the chat's page pane, beside a usable message box, instead of covering the window. */
   fullScreen: { open: boolean; toggle(): void; pane?: boolean };
-  /** Shown in a room: view-only, so no Point and no Share. */
+  /** Shown in a room: the page acts for nobody, so no Share; Point sends the pick to the bot that made the page. */
   room?: boolean;
   pin?: ReturnType<typeof usePagePin>;
 }
@@ -226,11 +227,11 @@ export function PageToolbar({ version, point, share, save, ready, fullScreen, ro
         {version.flash && <span role="status" data-page-updated className="ms-1 rounded-full bg-accent/15 px-2 py-px font-medium text-accent-text">{t("chat.preview.updated")}</span>}
       </div>
       <div className="ms-auto flex flex-wrap items-center gap-1">
+        <button type="button" aria-pressed={point.pointing} onClick={point.toggle} disabled={!ready} title={t("chat.preview.pointHint")}
+          className={cn(ASK_CHIP, point.pointing ? ASK_CHIP_PICKED : ASK_CHIP_IDLE)}>
+          <Crosshair size={14} />{t("chat.preview.point")}
+        </button>
         {!room && <>
-          <button type="button" aria-pressed={point.pointing} onClick={point.toggle} disabled={!ready} title={t("chat.preview.pointHint")}
-            className={cn(ASK_CHIP, point.pointing ? ASK_CHIP_PICKED : ASK_CHIP_IDLE)}>
-            <Crosshair size={14} />{t("chat.preview.point")}
-          </button>
           <button type="button" onClick={() => void share.run(version.rev)} disabled={busy} className={cn(ASK_CHIP, ASK_CHIP_IDLE)}>
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}{t("chat.preview.share")}
           </button>
@@ -330,6 +331,8 @@ export function PageFullScreen(props: PageToolsProps & {
   close(): void;
   /** Open in this pane, leaving the message box usable, rather than over the whole window. */
   pane?: HTMLElement | null;
+  /** Text the person selected in the page, to cite it: never in a room. */
+  onSelection?(selection: AppSelection | null): void;
 }) {
   const { point, close, pane } = props;
   const closer = useRef<HTMLDivElement | null>(null);
@@ -358,7 +361,8 @@ export function PageFullScreen(props: PageToolsProps & {
       </div>
       <div className={cn("relative min-h-0 flex-1 bg-app", point.pointing && "ring-2 ring-inset ring-accent/60")}>
         <AppFrame doc={props.doc} botId={props.botId} threadId={props.threadId} title={props.title} height={600} handle={props.handle}
-          onHeight={() => {}} onProblem={() => {}} onTeardownRequested={close} fill />
+          onHeight={() => {}} onProblem={() => {}} onTeardownRequested={close} fill
+          {...(props.onSelection ? { onSelection: props.onSelection } : {})} />
       </div>
     </div>,
     pane ?? document.body,

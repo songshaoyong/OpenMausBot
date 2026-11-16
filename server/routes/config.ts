@@ -29,7 +29,7 @@ import type { InstanceConfigMap, ModelSelection } from "../contracts.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { parseConfigPatchForPerson } from "../decider/config-errors.ts";
 import { TEAM_PERSONAL_HINTS } from "../../shared/cloud-hints.ts";
-import { DECIDER_KEY_ERROR, deciderIncludedHere, deciderPatchKey, deciderSavePatch, deciderSharedKeyUsable, type Decider } from "../decider/index.ts";
+import { DECIDER_KEY_ERROR, deciderIncludedHere, deciderPatchKey, deciderSavePatch, deciderBorrowedKey, type Decider } from "../decider/index.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import { HOSTED_PROVIDER_SETTINGS_ERROR } from "../hosted-models.ts";
 import { forgetKey } from "../key-rejections.ts";
@@ -75,6 +75,8 @@ export interface ConfigRouteDeps {
   sharedComputerControl: Pick<SharedComputerControl, "close">;
   hostedModels: boolean;
   cloudHome: boolean;
+  /** A Team Cloud shares one browser egress policy across every member. */
+  cloudTeam?: boolean;
   /** Security: a Team Cloud never takes over another installation's Composio user, since every member's bots would then get that person's apps. */
   sharedMembership: () => boolean;
   lendingEnabled(): boolean;
@@ -131,6 +133,9 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
       const body = await readBody(req);
       if (hostedModels && ["instances", "anthropic", "openai", "openrouter", "openaiCompat", "xai", "mistral", "cerebras", "groq", "greenference", "modelgo", "meta", "opencodeGo"].some(key => Object.hasOwn(body, key))) return json(res, 403, { error: HOSTED_PROVIDER_SETTINGS_ERROR });
       const patch = parseConfigPatchForPerson(body);
+      if (deps.cloudTeam && patch.browserEngine?.egress?.proxy !== undefined && !(auth.kind === "session" && auth.session.teamRole === "owner")) {
+        return json(res, 403, { error: "Only the Team Cloud owner can configure the browser proxy." });
+      }
       if (patch.profile && ownProfile) {
         // The address is the verified claim's; a profile names no other.
         const { email: _email, ...own } = patch.profile;
@@ -181,7 +186,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
       if (patch.decider) {
-        const planned = deciderSavePatch(patch.decider, cfg.decider, { included: deciderIncludedHere(), shared: deciderSharedKeyUsable(cfg) });
+        const planned = deciderSavePatch(patch.decider, cfg.decider, { included: deciderIncludedHere(), shared: deciderBorrowedKey(cfg) });
         if (!planned.ok) return json(res, 400, refusalBody(planned));
         patch.decider = planned.patch;
       }
@@ -568,6 +573,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
           if (persisted.decider?.key !== undefined) persisted.decider.key = "";
           if (persisted.decider?.openrouterKey !== undefined) persisted.decider.openrouterKey = "";
           if (persisted.decider?.workersAiToken !== undefined) persisted.decider.workersAiToken = "";
+          if (persisted.decider?.customKey !== undefined) persisted.decider.customKey = "";
           if (persisted.imageGen?.key !== undefined) persisted.imageGen.key = "";
           if (persisted.imageGen?.customApiKey !== undefined) persisted.imageGen.customApiKey = "";
           if (persisted.imageGen?.geminiKey !== undefined) persisted.imageGen.geminiKey = "";

@@ -34,7 +34,7 @@ import { useOpenComputer, WherePage } from "./ComputerTab";
 import { SettingsPage } from "./SettingsPage";
 import { panelMemoryNotes, withMemoryNote, withoutMemoryNote, type PanelMemoryNote } from "./memory-notes";
 import type { SimplePageId } from "./page-registry";
-import { BotSwitch, buttonCls, Card, ColRow, LinkRow, NoteRow, RadioRow, RowIcon, rowCls, RowText, SwitchRow, TextRow, TrashButton } from "./rows";
+import { BotSwitch, buttonCls, Card, ColRow, ItemRow, LinkRow, NoteRow, RadioRow, RowIcon, rowCls, RowText, SwitchRow, TextRow, TrashButton } from "./rows";
 import { MemoryUpkeepCards } from "./MemoryUpkeepCards";
 import { useMemoryDoc } from "./use-memory-doc";
 import { useTeamMemoryEntries } from "../conversation-share/conversation-share";
@@ -144,8 +144,10 @@ export function RoutinesPage({ bot, derived }: PageContext) {
         routines={derived.botRoutines}
         runs={state.routineRuns}
         pausedBots={state.config?.pausedBots}
+        heldBots={state.config?.heldBots}
         loading={state.routinesLoadState === "loading" && derived.botRoutines.length === 0}
         error={state.routinesLoadState === "error"}
+        unreadable={state.config?.routinesUnreadable}
         onOpen={setEditing}
         onLogs={(routine) => dispatch({ type: "showRoutines", section: "logs", botId: bot.id, routineId: routine.id })}
         onToggle={(routine) => dispatch({ type: "updateRoutine", routineId: routine.id, patch: { enabled: !routine.enabled } })}
@@ -417,6 +419,8 @@ export function SkillsPage({ bot }: PageContext) {
   const [importing, setImporting] = useState(false);
   const [imported, setImported] = useState<string[]>([]);
   const libraryOn = skillsLibraryEnabled(state.config);
+  const own = skills.skills.filter((skill) => skill.origin !== "project");
+  const project = skills.skills.filter((skill) => skill.origin === "project");
 
   const remove = async (skill: ManagedSkill) => {
     if (skills.working) return;
@@ -463,9 +467,9 @@ export function SkillsPage({ bot }: PageContext) {
       <Card>
         {skills.loading ? (
           <NoteRow>{t("skills.loading")}</NoteRow>
-        ) : skills.skills.length === 0 ? (
+        ) : own.length === 0 ? (
           <NoteRow>{t("botSettings.simple.noSkills")}</NoteRow>
-        ) : skills.skills.map((skill) => (
+        ) : own.map((skill) => (
           <SwitchRow
             key={skill.name}
             data-panel-row={`skill:${skill.name}`}
@@ -481,6 +485,13 @@ export function SkillsPage({ bot }: PageContext) {
         ))}
         {skills.error && !skills.reviewing && <NoteRow tone="warn">{skills.error}</NoteRow>}
       </Card>
+      {project.length > 0 && (
+        <Card label={t("botPanel.skills.project")} anchor="project-skills">
+          {project.map((skill) => (
+            <ItemRow key={skill.name} data-panel-row={`project-skill:${skill.name}`} title={skill.name} hint={skill.description || skill.source} />
+          ))}
+        </Card>
+      )}
       <OrgSkillsCard bot={bot} onAdded={() => void skills.refresh()} />
       <Card>
         <TextRow

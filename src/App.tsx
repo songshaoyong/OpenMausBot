@@ -19,6 +19,7 @@ import { viewerClosedRelease } from "@/components/computer-takeover";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { ForkPanel } from "@/components/ForkPanel";
 import { SIDEBAR_AND_PANEL_FIT, SIDEBAR_INLINE, TWO_SIDE_PANELS_FIT, useMediaQuery } from "@/lib/use-media-query";
 import { preloadConnectedApps } from "@/lib/connected-apps";
 import {
@@ -71,7 +72,7 @@ import { botUnreadCount, showBrowserUnread } from "@/lib/bot-unread";
 import { phonePairingSettingsAction, takePhonePairingRequest } from "@/lib/phone-pairing"; import { useConnectLink } from "@/lib/use-connect-link";
 import { isSettingsPage } from "@/components/settings/settings-index";
 import { useBotListDrawer } from "@/hooks/use-bot-list-drawer";
-import { useDesktopNotificationOpens, useExternalChatLinks } from "@/hooks/use-external-chat-links";
+import { useDesktopNotificationOpens, useExternalChatLinks } from "@/hooks/use-external-chat-links"; import { useNewBotFromOtherPlace } from "@/lib/places-together";
 import { useUsageSnapshot } from "@/hooks/use-usage-snapshot";
 import { useReadShownChatOnFocus } from "@/hooks/use-read-shown-chat";
 import { usePresence } from "@/hooks/use-presence";
@@ -105,6 +106,9 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const sidebarAndPanelFit = useMediaQuery(SIDEBAR_AND_PANEL_FIT, true);
   const sidebarInline = useMediaQuery(SIDEBAR_INLINE, false);
   useEffect(() => {
+    if (!sidebarInline && state.forkPanel) dispatch({ type: "closeForkPanel" });
+  }, [sidebarInline, state.forkPanel, dispatch]);
+  useEffect(() => {
     if (!window.ogb?.environments) return;
     const open = (computerId?: string | null) => {
       if (computerId) {
@@ -136,7 +140,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     dispatch(phonePairingSettingsAction());
   }, [dispatch]);
   useConnectLink(dispatch, Boolean(state.config?.team));
-  useExternalChatLinks(state, dispatch); useDesktopNotificationOpens(state, dispatch);
+  useExternalChatLinks(state, dispatch); useDesktopNotificationOpens(state, dispatch); useNewBotFromOtherPlace(state.hydrated === true, useCallback(() => dispatch({ type: "newBot" }), [dispatch]));
   usePresence(state, dispatch); useTeamPresence(state);
   usePageLanguage(effectiveLanguage(useLanguageChoice(), state.config?.language), true);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -157,7 +161,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const notificationFeed = useNotificationFeed() && !remoteClient;
   const advanced = useAdvancedMode();
   const roomPanelOpen = useRoomPanelShown({ group, state, simple: !advanced && !remoteClient });
-  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || state.computerOpen || state.inspectorOpen || state.activityOpen)) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
+  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || state.computerOpen || state.inspectorOpen || state.activityOpen)) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
   const collapseSidebar = sidePanelOpen && !sidebarAndPanelFit;
   const calendarFocus = state.activeView === "routines" && state.routinesFocus.view === "calendar";
   const notificationTray = notificationFeed && !calendarFocus;
@@ -329,7 +333,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     <AppNotices quiet={paletteOpen || drawerOpen || Boolean(localVmWorkspaceBotId)} viewer={viewer} />
   </>;
   return (
-    <div className={cn("flex h-full flex-col", framed && "bg-frame")} onClickCapture={drawerOpen ? noteDrawerAction : undefined} onKeyDownCapture={drawerOpen ? noteDrawerAction : undefined}>
+    <div data-look="app" className={cn("flex h-full flex-col", framed && "bg-frame")} onClickCapture={drawerOpen ? noteDrawerAction : undefined} onKeyDownCapture={drawerOpen ? noteDrawerAction : undefined}>
       <WindowFrameBar notifications={notificationTray} />
       <BotLimitPopup />
       <ConversationShareDialogs />
@@ -431,10 +435,11 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         )
       )}
       <AppPreviewPanel />
-      {roomPanelOpen && group && (
+      {state.forkPanel && sidebarInline && <ForkPanel />}
+      {!state.forkPanel && roomPanelOpen && group && (
         <RoomPanel key={`room:${group.id}`} group={group} overlay={notificationFeed && state.notificationsOpen && !twoSidePanelsFit} />
       )}
-      {!remoteClient && state.inspectorOpen && bot && <InspectorPanel key={bot.threadId} bot={bot} />}
+      {!remoteClient && !state.forkPanel && state.inspectorOpen && bot && <InspectorPanel key={bot.threadId} bot={bot} />}
       {!remoteClient && state.activityOpen && bot && <ActivityPanel key={`activity:${bot.id}`} bot={bot} />}
       {inboxShown && <InboxPanel />}
       {notificationTray && state.notificationsOpen && <NotificationsPanel />}

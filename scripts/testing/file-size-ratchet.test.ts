@@ -16,21 +16,21 @@ const HARD_CAP = 2000;
 const LISTED_FROM = 1000;
 
 const LINES: Record<string, number> = {
-  "server/index.ts": 15515,
-  "src/state/store.tsx": 3333,
+  "server/index.ts": 15444,
+  "src/state/store.tsx": 3292,
   "electron/main.mjs": 3160,
-  "server/store.ts": 2291,
+  "server/store.ts": 2289,
   "src/components/Sidebar.tsx": 1687,
-  "server/drivers/claude.ts": 2087,
-  "server/drivers/acp/core.ts": 1704,
+  "server/drivers/claude.ts": 2085,
+  "server/drivers/acp/core.ts": 1678,
   "server/drivers/codex.ts": 1718,
-  "server/routines.ts": 1555,
+  "server/routines.ts": 1553,
   "src/components/ComputerPanel.tsx": 1782,
   "src/components/RoutineCalendarPage.tsx": 1622,
-  "server/config.ts": 1245,
-  "src/components/ChatView.tsx": 1293,
-  "server/routine-requests.ts": 1474,
-  "src/components/GroupView.tsx": 1220,
+  "server/config.ts": 1244,
+  "src/components/ChatView.tsx": 1281,
+  "server/routine-requests.ts": 1468,
+  "src/components/GroupView.tsx": 1215,
   "src/components/LocalComputerSection.tsx": 1437,
   "src/components/CursorAvatar.tsx": 1324,
   "server/skills.ts": 1379,
@@ -42,14 +42,14 @@ const LINES: Record<string, number> = {
   "server/plan-usage.ts": 1046,
   "server/container-computer.ts": 1175,
   "src/components/ModelPicker.tsx": 1039,
-  "src/components/PhoneSetupFlow.tsx": 1089,
+  "src/components/PhoneSetupFlow.tsx": 1088,
   "server/cli.ts": 1053,
   "src/components/AttachmentPreview.tsx": 1034,
   "server/meetings/meetbot.ts": 1047,
 };
 
 function sourceFiles(): string[] {
-  const out = execFileSync("git", ["ls-files", "server", "shared", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
+  const out = execFileSync("git", ["ls-files", "server", "shared", "packages", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
   return out.split("\n").filter((file) => /\.(ts|tsx|mjs|cjs)$/.test(file))
     .filter((file) => !file.includes(".test.") && !file.includes("/testing/") && !file.includes("goldens") && !file.startsWith("electron/vendor/"));
 }
