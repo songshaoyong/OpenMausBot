@@ -95,6 +95,10 @@ export interface EgressSetup {
    * none of the person's computers shares it; null where this browser may not use a computer's connection. Only the
    * sites that turn away data centres (home-sites.ts) go through it. */
   device?(session: string): GateUpstream | { away: string } | { unshared: true } | null;
+  /** The host port of this browser session's own Local VM viewer, or false. Never another bot's, never the API. */
+  ownDesktop?(session: string, port: number): boolean;
+  /** A stream to `port` on this browser session's private desktop, or null when that desktop is not running. */
+  intoDesktop?(session: string, port: number): Promise<import("node:stream").Duplex | null>;
 }
 
 interface Blocked { target: string; reason: Refusal }
@@ -108,7 +112,7 @@ export const UNSHARED_NOTICE = `Sites that turn away data centres, such as Insta
 
 /** One gate per browser session for the life of the server, so a Chrome keeps the port it launched with. */
 export class BrowserEgress {
-  private setup: Required<Omit<EgressSetup, "device">> & Pick<EgressSetup, "device"> | null = null;
+  private setup: Required<Omit<EgressSetup, "device" | "ownDesktop" | "intoDesktop">> & Pick<EgressSetup, "device" | "ownDesktop" | "intoDesktop"> | null = null;
   private readonly gates = new Map<string, Promise<EgressGate>>();
   private readonly blocked = new Map<string, Blocked[]>();
   /** Sessions told those sites load from My Cloud's own connection, until the computer is back. */
@@ -134,7 +138,7 @@ export class BrowserEgress {
     return this.setup && opensReddit(this.setup.host, params) ? REDDIT_REFUSAL : null;
   }
 
-  rules(): EgressRules {
+  rules(session?: string): EgressRules {
     const setup = this.setup;
     if (!setup) throw new Error("The browser's network gate is not set up.");
     const config = setup.config();
@@ -144,6 +148,7 @@ export class BrowserEgress {
       botPort: (port) => setup.ownership.botOwned(port),
       localNetwork: setup.host === "server" ? config?.localNetwork === true : config?.localNetwork !== false,
       allowed: allowList(setup.host === "server" ? config?.allow : undefined),
+      ...(session && setup.ownDesktop ? { ownDesktop: (port: number) => setup.ownDesktop!(session, port) } : {}),
     };
   }
 
@@ -166,11 +171,12 @@ export class BrowserEgress {
     if (!gate) {
       gate = openGate({
         refuseName: (target) => this.nameRefusal(target.host),
-        decide: (target, addresses) => refusalFor(target, addresses, this.rules()),
+        decide: (target, addresses) => refusalFor(target, addresses, this.rules(session)),
         onRefusal: (target, reason) => this.note(session, target, reason as Refusal),
         resolve: this.setup.resolve,
         upstreamProxy: () => parseSocks5Proxy(this.setup?.config()?.proxy),
         upstream: (target) => !this.setup?.config()?.proxy && opensFromHome(target.host) ? this.through(session) : null,
+        ...(this.setup.intoDesktop ? { intoDesktop: (port: number) => this.setup!.intoDesktop!(session, port) } : {}),
       });
       this.gates.set(session, gate);
       gate.then((opened) => this.setup?.listeners.add(opened.port), () => this.gates.delete(session));

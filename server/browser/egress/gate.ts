@@ -9,9 +9,10 @@
 // upstream connection gets a SOCKS reply, and a connection may go out through an upstream.
 import { lookup } from "node:dns/promises";
 import { connect, createServer, isIP, type BlockList, type Socket } from "node:net";
+import type { Duplex } from "node:stream";
 
 import type { LinkOpened } from "../../../electron/device-link-protocol.mjs";
-import { addressClass, namesThisMachine, ownAddresses } from "./policy.ts";
+import { addressClass, isPrivateDesktopName, namesThisMachine, ownAddresses } from "./policy.ts";
 
 export interface ResolvedAddress { address: string; family: number }
 export interface GateTarget { host: string; port: number }
@@ -31,6 +32,9 @@ export interface GateOptions {
   upstream?(target: GateTarget): GateUpstream | null;
   /** A configured unauthenticated SOCKS5 proxy for public destinations after the local destination policy passes. */
   upstreamProxy?: () => { host: string; port: number } | null;
+  /** `desktop.localhost` only: a stream to that port on this browser's private desktop, or null when it has none.
+   * Never used for `localhost` or `127.0.0.1`, which stay this computer. */
+  intoDesktop?(port: number): Promise<Duplex | null>;
   /** This machine's own addresses, which never go upstream: its interfaces unless a test passes them. */
   own?(): BlockList;
 }
@@ -281,6 +285,23 @@ export function openGate(options: GateOptions): Promise<EgressGate> {
       };
       client.on("data", holdEarly);
       void (async () => {
+        if (isPrivateDesktopName(target.host)) {
+          client.off("data", holdEarly);
+          const bridge = await options.intoDesktop?.(target.port).catch(() => null) ?? null;
+          if (client.destroyed) return void bridge?.destroy();
+          if (!bridge) {
+            options.onRefusal?.(target, "desktop");
+            return refuse(client, NOT_ALLOWED);
+          }
+          client.write(reply(SUCCEEDED));
+          for (const chunk of early) bridge.write(chunk);
+          bridge.pipe(client);
+          client.pipe(bridge);
+          bridge.on("error", () => client.destroy());
+          client.on("close", () => bridge.destroy());
+          bridge.on("close", () => client.destroy());
+          return;
+        }
         const named = options.refuseName?.(target) ?? null;
         const through = named === null && !staysHere(target.host, options.own?.()) ? options.upstream?.(target) ?? null : null;
         if (through) {

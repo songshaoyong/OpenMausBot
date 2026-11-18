@@ -129,6 +129,20 @@ describe("what each host lets a bot's browser reach", () => {
     }
   });
 
+  it("lets a browser open its own Local VM viewer on loopback, and no other desktop or OpenMausBot port", async () => {
+    const ownDesktop = (port: number) => port === 49152 || port === 6080 || port === 8799;
+    const open = { ownDesktop };
+    expect(await decide("server", "127.0.0.1:49152", ["127.0.0.1"], open)).toBeNull();
+    expect(await decide("server", "localhost:49152", ["127.0.0.1", "::1"], open)).toBeNull();
+    expect(await decide("server", "localhost:6080", ["::1"], { ...open, ownPort: (port) => port === 6080 || port === 8799 })).toBeNull();
+    expect(await decide("server", "127.0.0.1:49153", ["127.0.0.1"], open)).toBe("this-computer");
+    expect(await decide("server", "localhost:8799", ["127.0.0.1"], { ...open, ownPort: (port) => port === 8799 })).toBe("omb");
+    expect(await decide("server", "rebind.example:49152", ["127.0.0.1"], open)).toBe("this-computer");
+    expect(await decide("server", "192.168.1.5:49152", ["192.168.1.5"], open)).toBe("this-computer");
+    expect(await decide("cloud", "127.0.0.1:49152", ["127.0.0.1"], open)).toBeNull();
+    expect(await decide("cloud", "127.0.0.1:49153", ["127.0.0.1"], open)).toBe("this-computer");
+  });
+
   it("lets a server reach only the loopback ports a bot's own processes opened, or that an admin allowed", async () => {
     expect(await decide("server", "localhost:3000", ["127.0.0.1"])).toBeNull();
     expect(await decide("server", "localhost:3001", ["127.0.0.1"])).toBe("this-computer");

@@ -2,7 +2,7 @@ import { z, type ZodString } from "zod";
 import * as boat from "../boat.ts";
 import { boatHealth } from "../boat-health.ts";
 import type { ComputerControl } from "../computer-control.ts";
-import { isValidSshAlias, localVmMaxInstances, localVmMode, localVmResources, type AppConfig } from "../config.ts";
+import { isValidSshAlias, localVmExposure, localVmMaxInstances, localVmMode, localVmResources, type AppConfig } from "../config.ts";
 import {
   containerComputerAction,
   containerComputerExists,
@@ -15,6 +15,7 @@ import {
 } from "../container-computer.ts";
 import { viewerTargetId } from "../../shared/desktop-viewer.ts";
 import { localVmViewerStatus } from "../desktop-viewer-targets.ts";
+import { localVmShare } from "../local-vm-share.ts";
 import { keepFirefoxProfileBeforeRemove } from "../local-vm-profiles.ts";
 import type { ComputerIdleTimer } from "../computer-idle.ts";
 import type { LocalVmLease } from "../local-vm-lease.ts";
@@ -324,7 +325,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
       else localVmLifecycleBusy.add(SHARED_LOCAL_VM_TARGET.key);
       try {
         if (action === "remove") await keepSignInsBeforeRemove(SHARED_LOCAL_VM_TARGET);
-        const status = await containerComputerAction(action, undefined, undefined, SHARED_LOCAL_VM_TARGET, localVmResources(cfg));
+        const status = await containerComputerAction(action, undefined, undefined, SHARED_LOCAL_VM_TARGET, localVmResources(cfg), localVmExposure(cfg));
         if (action === "run" || action === "start") {
           localVmSeen.add(SHARED_LOCAL_VM_TARGET.key);
           localVmIdleFor(SHARED_LOCAL_VM_TARGET).touch();
@@ -332,6 +333,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
         if (action === "stop" || action === "remove") localVmIdleFor(SHARED_LOCAL_VM_TARGET).cancel();
         return json(res, 200, {
           ...localVmViewerStatus(status, auth),
+          share: localVmShare(status, cfg),
           commands: setupCommands(status.runtime, process.platform, SHARED_LOCAL_VM_TARGET),
           idle_timeout_ms: localVmIdleMs(),
           mode: localVmMode(cfg),
@@ -399,7 +401,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
           }
         }
         if (action === "remove") await keepSignInsBeforeRemove(target);
-        const status = await containerComputerAction(action, undefined, undefined, target, localVmResources(cfg));
+        const status = await containerComputerAction(action, undefined, undefined, target, localVmResources(cfg), localVmExposure(cfg));
         if (action === "run" || action === "start") {
           localVmSeen.add(target.key);
           localVmIdleFor(target).touch();
@@ -407,6 +409,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
         if (action === "stop" || action === "remove") localVmIdleFor(target).cancel();
         return json(res, 200, {
           ...localVmViewerStatus(status, auth),
+          share: localVmShare(status, cfg),
           commands: setupCommands(status.runtime, process.platform, target),
           idle_timeout_ms: localVmIdleMs(),
           mode: localVmMode(cfg),

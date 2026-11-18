@@ -133,6 +133,8 @@ import {
   containerComputerAction,
   containerComputerFrame,
   containerComputerStatus,
+  rememberedLocalVmViewerPort,
+  rememberedRunningLocalVm,
   containerExec,
   containerRuntimeStatus,
   localVmWakeAction,
@@ -156,7 +158,7 @@ import {
   localVmIdleTimeoutMinutes,
   localVmMaxInstances,
   localVmMode,
-  localVmPreservesInstalledApps, localVmResources,
+  localVmExposure, localVmPreservesInstalledApps, localVmResources,
   roomTurnTimeoutMinutes,
   mcpCallTimeoutMinutes,
   cacheKeepWarmSettings,
@@ -622,6 +624,7 @@ import { createDesktopViewer, desktopViewerUrl } from "./routes/desktop-viewer.t
 import { createUpgrades } from "./routes/upgrades.ts";
 import { createBrowserViewerRoutes } from "./routes/browser-viewers.ts";
 import { localDesktopTarget, localVmViewerStatus } from "./desktop-viewer-targets.ts";
+import { localVmShare } from "./local-vm-share.ts";
 import { DESKTOP_VIEWER_TARGET, viewerTargetId } from "../shared/desktop-viewer.ts";
 import { createComputerPreviews } from "./computer-previews.ts";
 import { createAntigravityLeftoverRoutes } from "./routes/antigravity-leftovers.ts";
@@ -2391,7 +2394,7 @@ const {
   browserRuntime, browserLive, usedBrowserSessions, browserSweep, temporaryBrowserSessions,
   currentBrowserSession, forgetTemporaryBrowser, myChromeAvailable, usesMyChrome, lentChromeSummary, browserSessionSpec, browserIntegration,
   browserReady, currentBrowserSpec, loginInput, browserSystemPrompt, closeBrowser, browserEngineSwitched, eraseDeletedBrowser, engineSummary, browserSessionsOf, signedInSitesTarget, uploadPaths, eraseAudienceBrowsers,
-} = createBrowserHost({ cfg, language: appLanguage, store: () => store, turnResources, activeInternalGenerationByThread, mintInternalCapability, DESKTOP_MANAGED, CLOUD_HOME, HOSTED_WORKSPACE, PORT, engineMemory, audienceOf: teamHost.browserAudience, ...(CLOUD_TEAM ? { browserBox: (fd: number, ro: readonly string[]) => botBox.browserBox(fd, ro) } : {}), lendRefusal: (turn) => cloudLendingRefusal({ botId: store.botByThread(turn.threadId)?.id ?? "", threadId: turn.threadId, generation: turn.generation }), device: () => deviceLinks.route(CLOUD_HOME_LENDER) ?? sharedComputers.internetAway(CLOUD_HOME_LENDER) ?? { unshared: true as const }, lentChrome: CLOUD_PERSONAL ? { route: () => deviceLinks.chromeRoute(CLOUD_HOME_LENDER), lender: () => sharedComputers.chromeLender(CLOUD_HOME_LENDER) } : undefined });
+} = createBrowserHost({ cfg, language: appLanguage, store: () => store, turnResources, activeInternalGenerationByThread, mintInternalCapability, DESKTOP_MANAGED, CLOUD_HOME, HOSTED_WORKSPACE, PORT, engineMemory, audienceOf: teamHost.browserAudience, localVmViewerPort: localVmViewerPortForBot, runningLocalVm: runningLocalVmForBot, ...(CLOUD_TEAM ? { browserBox: (fd: number, ro: readonly string[]) => botBox.browserBox(fd, ro) } : {}), lendRefusal: (turn) => cloudLendingRefusal({ botId: store.botByThread(turn.threadId)?.id ?? "", threadId: turn.threadId, generation: turn.generation }), device: () => deviceLinks.route(CLOUD_HOME_LENDER) ?? sharedComputers.internetAway(CLOUD_HOME_LENDER) ?? { unshared: true as const }, lentChrome: CLOUD_PERSONAL ? { route: () => deviceLinks.chromeRoute(CLOUD_HOME_LENDER), lender: () => sharedComputers.chromeLender(CLOUD_HOME_LENDER) } : undefined });
 
 const dataSheets = new DataSheetRegistry({
   broadcast: (frame) => broadcast({ ...frame }),
@@ -5631,7 +5634,7 @@ let localVmProvisionBusy = false;
 let localVmModeChangeBusy = false;
 const localVmUpdates = createLocalVmUpdater({
   status: (target) => containerComputerStatus(undefined, undefined, target),
-  act: (action, target) => containerComputerAction(action, undefined, undefined, target, localVmResources(cfg)),
+  act: (action, target) => containerComputerAction(action, undefined, undefined, target, localVmResources(cfg), localVmExposure(cfg)),
   imageBusy: { get: () => localVmImageBusy, set: (busy) => { localVmImageBusy = busy; } },
   provisionBusy: { get: () => localVmProvisionBusy, set: (busy) => { localVmProvisionBusy = busy; } },
   lifecycleBusy: localVmLifecycleBusy,
@@ -6214,6 +6217,31 @@ function claimManagedVpsMutation(containerName: string): () => void {
 
 function localVmTargetForBot(botId: string): LocalVmTarget {
   return localVmMode(cfg) === "per-bot" ? perBotLocalVmTarget(botId) : SHARED_LOCAL_VM_TARGET;
+}
+
+/** The desktop this bot is using. A pool seat counts only while this bot holds it. */
+function localVmKeyForBot(botId: string): string | null {
+  if (!botId) return null;
+  const mode = localVmMode(cfg);
+  if (mode === "pool") {
+    for (let seat = 0; seat < localVmMaxInstances(cfg); seat += 1) {
+      const target = poolLocalVmTarget(seat);
+      if (localVmLeases.forTarget(target.key).current(localVmOwnerBusy)?.botId === botId) return target.key;
+    }
+    return null;
+  }
+  return mode === "per-bot" ? perBotLocalVmTarget(botId).key : SHARED_LOCAL_VM_TARGET.key;
+}
+
+/** The loopback viewer of the desktop this bot is using. A pool seat counts only while this bot holds it. */
+function localVmViewerPortForBot(botId: string): number | null {
+  const key = localVmKeyForBot(botId);
+  return key ? rememberedLocalVmViewerPort(key) : null;
+}
+
+function runningLocalVmForBot(botId: string): { runtime: "docker" | "podman"; containerName: string } | null {
+  const key = localVmKeyForBot(botId);
+  return key ? rememberedRunningLocalVm(key) : null;
 }
 
 function localVmPoolSeatHolder(seat: number): LocalVmSeatHolder | null {
@@ -11613,7 +11641,11 @@ async function saveLoginFromCard(botId: string, threadId: string, messageId: str
 
 /** Saved logins appear by site and username only. */
 function browserPromptFor(bot: { id: string; browserProfile?: string }, agentsMounted: boolean): string {
-  return browserSystemPrompt(bot.browserProfile) + (agentsMounted ? savedLoginsPrompt(botLogins.sitesFor(bot.id)) : "");
+  const port = localVmViewerPortForBot(bot.id);
+  const desktop = runningLocalVmForBot(bot.id)
+    ? ` Services you start on your private desktop are http://desktop.localhost:<port>/ from this browser. localhost and 127.0.0.1 stay this computer.${port ? ` The desktop screen is http://127.0.0.1:${port}/vnc.html.` : ""}`
+    : "";
+  return browserSystemPrompt(bot.browserProfile) + desktop + (agentsMounted ? savedLoginsPrompt(botLogins.sitesFor(bot.id)) : "");
 }
 
 /** Null while the browser engine is not installed. */
@@ -11637,6 +11669,7 @@ async function localVmPayload(target: LocalVmTarget, auth: RequestAuth) {
   const status = localVmUpdates.describe(target, await containerComputerStatus(undefined, undefined, target));
   return {
     ...localVmViewerStatus(status, auth),
+    share: localVmShare(status, cfg),
     stop_reason: localVmStopReason(target.key, status),
     commands: setupCommands(status.runtime, process.platform, target),
     idle_timeout_ms: localVmIdleMs(),
@@ -11668,7 +11701,7 @@ async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurre
 
     broadcast({ kind: "computer", botId, state: "provisioning" });
     try {
-      status = await containerComputerAction(action, undefined, undefined, target, localVmResources(cfg));
+      status = await containerComputerAction(action, undefined, undefined, target, localVmResources(cfg), localVmExposure(cfg));
     } catch {
       // `run` can throw after the container exists, so arm the idle backstop anyway.
       localVmIdleFor(target).touch();

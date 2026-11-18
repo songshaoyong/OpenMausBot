@@ -19,9 +19,24 @@ export const DEFAULT_LOCAL_VM_IDLE_TIMEOUT_MINUTES = 480;
 export const MIN_LOCAL_VM_IDLE_TIMEOUT_MINUTES = 5;
 export const MAX_LOCAL_VM_IDLE_TIMEOUT_MINUTES = 1_440;
 
+/** A Local VM port another machine on the network may open on the host; `host` unset asks the runtime for a free one. */
+export const localVmPublishedPortSchema = z.object({
+  guest: z.number().int().min(1).max(65_535),
+  host: z.number().int().min(1).max(65_535).optional(),
+});
+
+export type LocalVmPublishedPort = z.infer<typeof localVmPublishedPortSchema>;
+
+/** Ports each desktop publishes on the host's every interface; a fixed `host` must be free on the machine. */
+export interface LocalVmExposure {
+  publish: readonly LocalVmPublishedPort[];
+}
+
 /** Bot desktop isolation, default "shared"; `maxInstances` caps per-bot desktops or pool seats. Switching modes cold-starts every desktop. */
 export const localVmConfigSchema = z.object({
   mode: z.enum(["shared", "per-bot", "pool"]).optional(),
+  /** A bot's own service, reachable from another machine on the network; each desktop publishes them for itself. */
+  publish: z.array(localVmPublishedPortSchema).max(8).optional(),
   maxInstances: z
     .number()
     .int()
@@ -39,6 +54,15 @@ export const localVmConfigSchema = z.object({
   memoryGb: z.number().int().min(MIN_DESKTOP_MEMORY_GB).max(MAX_DESKTOP_MEMORY_GB).optional(),
   /** Each desktop's CPU limit; 2 when unset. Docker refuses more CPUs than its engine has. */
   cpus: z.number().int().min(MIN_DESKTOP_CPUS).max(MAX_DESKTOP_CPUS).optional(),
+  /** How another machine reaches this desktop: the address it is shared on, and the ports the operator
+   * forwards there. The app fills in the current viewer password; nothing is shared until this is set. */
+  share: z
+    .object({
+      baseUrl: z.string().trim().max(200).regex(/^https?:\/\/[^\s/]+$/, "share.baseUrl must be http(s)://host"),
+      viewerPort: z.number().int().min(1).max(65_535).optional(),
+      servicePort: z.number().int().min(1).max(65_535).optional(),
+    })
+    .optional(),
 });
 
 export function localVmMode(cfg: AppConfig): "shared" | "per-bot" | "pool" {
@@ -56,6 +80,10 @@ export function localVmIdleTimeoutMinutes(cfg: AppConfig): number {
 /** App preservation is deliberately opt-in: a normal image replacement keeps its existing small, predictable footprint. */
 export function localVmPreservesInstalledApps(cfg: AppConfig): boolean {
   return cfg.localVm?.preserveInstalledApps === true;
+}
+
+export function localVmExposure(cfg: AppConfig): LocalVmExposure {
+  return { publish: cfg.localVm?.publish ?? [] };
 }
 
 export function localVmResources(cfg: AppConfig): DesktopResources {

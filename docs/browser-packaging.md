@@ -133,7 +133,13 @@ desktop client relay, the companion and its control page and gateway, the Vite
 dev server, the Local VM viewer, every port the server process has listened
 on, the ports the desktop app reports, each gate, and agent-browser's stream
 servers and Chrome DevTools ports. Servers add their HTTPS edge (8080),
-Caddy's admin API (2019) and the ports of fleet workspaces.
+Caddy's admin API (2019) and the ports of fleet workspaces. One exception:
+a bot's own built-in browser may open its own Local VM viewer by `localhost`
+or a loopback address, including the reserved viewer port 6080. Another bot's
+viewer, and any other OpenMausBot port, stays closed. A public name that
+resolves to loopback still does not open it. `localhost` and `127.0.0.1` stay
+this computer. A service the bot starts inside its own private desktop is
+`desktop.localhost` on that service's port, and only for that bot's browser.
 
 "A bot's own processes" means a process in the session of an engine running
 a bot's turns, so a dev server the bot started keeps counting after the shell

@@ -8,7 +8,9 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
+import type { LocalVmExposure } from "./local-vm-settings.ts";
 import { workspacePreparationDockerfile } from "./container-workspace.ts";
+import { desktopTweaksDockerfile } from "./desktop-tweaks.ts";
 import { DATA_DIR } from "./config.ts";
 import {
   applyResourcesBeforeStart,
@@ -52,7 +54,7 @@ export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
 // localhost/ is explicit: Podman prepends it to unqualified build tags and may then resolve the name on Docker Hub.
 // Image and container labels, not this mutable tag, decide compatibility.
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
-export const IMAGE_LAYER_VERSION = "9";
+export const IMAGE_LAYER_VERSION = "11";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
 export const CONTAINER = "openmausbot-computer";
@@ -78,6 +80,8 @@ export interface DesktopRunOptions {
   resources: DesktopResources;
   /** The account that owns the workspace on the host. */
   hostUser: HostUser | null;
+  /** Ports the host publishes for other machines; absent keeps every port on loopback. */
+  exposure?: LocalVmExposure;
 }
 
 export interface LocalVmTarget {
@@ -107,6 +111,30 @@ export function perBotLocalVmTarget(botId: string): LocalVmTarget {
     viewerPort: null,
     label: digest,
   };
+}
+
+/** The host port of a running desktop's loopback viewer, remembered from the last inspect. A stopped or publicly published viewer is forgotten. */
+const localVmViewerPorts = new Map<string, number>();
+/** A running loopback desktop a browser may enter by name. Forgotten with the viewer. */
+const runningLocalVms = new Map<string, { runtime: "docker" | "podman"; containerName: string }>();
+
+export function rememberedLocalVmViewerPort(key: string): number | null {
+  return localVmViewerPorts.get(key) ?? null;
+}
+
+export function rememberedRunningLocalVm(key: string): { runtime: "docker" | "podman"; containerName: string } | null {
+  return runningLocalVms.get(key) ?? null;
+}
+
+function rememberLocalVmViewer(target: LocalVmTarget, status: ContainerComputerStatus): void {
+  const port = status.viewer_port;
+  const forget = status.container === "stopped" || status.network === "unsafe" || !status.daemonUp;
+  if (status.container === "running" && status.network === "loopback" && typeof port === "number" && port > 0 && port <= 65_535) {
+    localVmViewerPorts.set(target.key, port);
+  } else if (forget) localVmViewerPorts.delete(target.key);
+  if (status.container === "running" && status.network === "loopback" && status.managed && (status.runtime === "docker" || status.runtime === "podman")) {
+    runningLocalVms.set(target.key, { runtime: status.runtime, containerName: target.containerName });
+  } else if (forget) runningLocalVms.delete(target.key);
 }
 
 /** Seat identities stay disjoint from the shared singleton and per-bot digests, so the three modes never meet. */
@@ -204,7 +232,7 @@ RUN printf '%s\\n' \\
       'stderr_logfile=/var/log/supervisor/cua-driver.error.log' \\
       'priority=30' \\
       >> /etc/supervisor/supervisord.conf
-LABEL ${MANAGED_LABEL}="1" \\
+${desktopTweaksDockerfile()}LABEL ${MANAGED_LABEL}="1" \\
       ${DRIVER_LABEL}="${CUA_DRIVER_VERSION}" \\
       ${BASE_IMAGE_LABEL}="${BASE_IMAGE_DIGEST}" \\
       ${IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"
@@ -311,6 +339,8 @@ export interface ContainerComputerStatus {
   workspace_guest_path: string;
   viewer_port: number | null;
   viewer_url: string;
+  /** Guest ports the person published for other machines, with the host port the runtime gave each. */
+  published_ports?: Array<{ guest: number; host: number }>;
 }
 
 function emptyStatus(platform: NodeJS.Platform, target: LocalVmTarget): ContainerComputerStatus {
@@ -508,6 +538,7 @@ export async function containerComputerStatus(
   status.create_supported = target.key === SHARED_LOCAL_VM_TARGET.key || status.runtime !== "container";
   if (!status.runtime || !status.daemonUp) {
     status.problem = statusProblem(status);
+    rememberLocalVmViewer(target, status);
     return status;
   }
 
@@ -577,8 +608,9 @@ export async function containerComputerStatus(
       const rootIsHostRoot = desktopRootIsHostRoot(status.runtime, platform, host);
       status.container = detail?.State?.Running ? "running" : "stopped";
       status.stopped_at = status.container === "stopped" ? detail?.State?.FinishedAt ?? null : null;
-      status.network = dockerPortsAreLocal(detail?.HostConfig?.PortBindings) ? "loopback" : "unsafe";
+      status.network = viewerPortsAreLocal(detail?.HostConfig?.PortBindings) ? "loopback" : "unsafe";
       status.viewer_port = dockerViewerPort(detail?.NetworkSettings?.Ports, target.viewerPort);
+      status.published_ports = publishedGuestPorts(detail?.NetworkSettings?.Ports);
       status.imageMatches =
         detail?.Config?.Image === IMAGE &&
         imageLabelsMatch(detail?.Config?.Labels) &&
@@ -673,6 +705,7 @@ export async function containerComputerStatus(
   status.problem = statusProblem(status);
   status.ready = status.problem === null;
   status.resumable = localVmResumable(status);
+  rememberLocalVmViewer(target, status);
   return status;
 }
 
@@ -680,12 +713,23 @@ function loopback(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "[::1]";
 }
 
-function dockerPortsAreLocal(
+/** Only the viewer has to stay on loopback; a port the person published is theirs to expose, so it never counts as unsafe. */
+function viewerPortsAreLocal(
   bindings: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null> | undefined,
 ): boolean {
   const viewer = bindings?.[`${INTERNAL_VIEWER_PORT}/tcp`] ?? [];
-  const published = Object.values(bindings ?? {}).flatMap((entries) => entries ?? []);
-  return viewer.length > 0 && published.length === viewer.length && published.every((entry) => loopback(entry.HostIp));
+  return viewer.length > 0 && viewer.every((entry) => loopback(entry.HostIp));
+}
+
+function publishedGuestPorts(
+  bindings: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null> | undefined,
+): Array<{ guest: number; host: number }> {
+  return Object.entries(bindings ?? {}).flatMap(([guestPort, entries]) => {
+    const guest = Number.parseInt(guestPort, 10);
+    if (!Number.isInteger(guest) || guest === INTERNAL_VIEWER_PORT) return [];
+    const host = Number(entries?.find((entry) => !loopback(entry.HostIp))?.HostPort);
+    return Number.isInteger(host) && host > 0 && host <= 65_535 ? [{ guest, host }] : [];
+  });
 }
 
 function dockerViewerPort(
@@ -773,6 +817,13 @@ function appleWorkspaceMountIsSafe(
   );
 }
 
+/** A port the person published reaches the VM from the network, so its host address is every interface, never loopback.
+ * Apple container takes no such mapping here: it fixes the viewer port and per-bot desktops are refused anyway. */
+function publishedPortArgs(runtime: Runtime, exposure: LocalVmExposure | undefined): string[] {
+  if (runtime === "container") return [];
+  return (exposure?.publish ?? []).flatMap(({ guest, host }) => ["-p", `0.0.0.0:${host ?? ""}:${guest}`]);
+}
+
 export function containerRunArgs(
   runtime: Runtime,
   password = "CHANGE_ME",
@@ -835,6 +886,7 @@ export function containerRunArgs(
     target.viewerPort
       ? `127.0.0.1:${target.viewerPort}:${INTERNAL_VIEWER_PORT}`
       : `127.0.0.1::${INTERNAL_VIEWER_PORT}`,
+    ...publishedPortArgs(runtime, desktop.exposure),
     IMAGE,
   );
   if (guestIds) common.push(...guestIdsCommand(guestIds));
@@ -875,6 +927,7 @@ export async function containerComputerAction(
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
   resources: DesktopResources = DEFAULT_DESKTOP_RESOURCES,
+  exposure: LocalVmExposure | undefined = undefined,
 ): Promise<ContainerComputerStatus> {
   if (runner === sh && platform === process.platform) screenshotStatusCache.delete(target.key);
   const before = await containerComputerStatus(runner, platform, target);
@@ -920,6 +973,7 @@ export async function containerComputerAction(
           platform,
           resources,
           hostUser: currentHostUser(platform),
+          exposure,
         })
         : action === "remove"
           ? ["rm", runtime === "container" ? "--force" : "-f", target.containerName]

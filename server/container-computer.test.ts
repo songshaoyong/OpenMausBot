@@ -32,6 +32,8 @@ import {
   localVmWorkspaceExists,
   managedImageDockerfile,
   perBotLocalVmTarget,
+  rememberedLocalVmViewerPort,
+  rememberedRunningLocalVm,
   SHARED_LOCAL_VM_TARGET,
   setupCommands,
   type CommandRunner,
@@ -589,6 +591,10 @@ describe("containerComputerStatus", () => {
       ready: true,
     });
     expect(status.viewer_url).toContain("http://127.0.0.1:49152/vnc.html");
+    expect(rememberedLocalVmViewerPort(target.key)).toBe(49152);
+    expect(rememberedRunningLocalVm(target.key)).toEqual({ runtime: "docker", containerName: target.containerName });
+    expect(rememberedLocalVmViewerPort(perBotLocalVmTarget("bot-b").key)).toBeNull();
+    expect(rememberedRunningLocalVm(perBotLocalVmTarget("bot-b").key)).toBeNull();
   });
 
   it("refuses a per-bot container carrying another target's label", async () => {
@@ -694,6 +700,29 @@ describe("containerComputerStatus", () => {
     expect(status.container).toBe("running");
     expect(status.network).toBe("unsafe");
     expect(status.ready).toBe(false);
+  });
+
+  it("keeps the viewer on loopback while a published port reaches the network", async () => {
+    const detail = JSON.parse(readyInspect())[0];
+    detail.HostConfig.PortBindings["8765/tcp"] = [{ HostIp: "0.0.0.0" }];
+    detail.NetworkSettings = {
+      Ports: {
+        "6901/tcp": [{ HostIp: "127.0.0.1", HostPort: "6080" }],
+        "8765/tcp": [{ HostIp: "0.0.0.0", HostPort: "8765" }],
+      },
+    };
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "27\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: JSON.stringify([detail]),
+    });
+
+    const status = await containerComputerStatus(fake.run, "linux");
+
+    expect(status.network).toBe("loopback");
+    expect(status.published_ports).toEqual([{ guest: 8765, host: 8765 }]);
   });
 
   it("rejects a privileged or host-namespaced Local VM even with correct limits", async () => {
@@ -982,7 +1011,7 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain("6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2");
     expect(dockerfile).toContain("/usr/local/share/licenses/noto-cjk/OFL.txt");
     expect(dockerfile).toContain("fc-cache -f");
-    expect(IMAGE_LAYER_VERSION).toBe("9");
+    expect(IMAGE_LAYER_VERSION).toBe("11");
   });
 
   it("starts the driver's Chrome without its own sandbox inside the hardened container", () => {
@@ -1185,6 +1214,23 @@ describe("setupCommands", () => {
     expect(args).not.toContain("--userns");
     expect(args).not.toContain("--user");
     expect(command).not.toContain("relabel=");
+  });
+
+  it("publishes an exposed port on every interface so another machine reaches the VM", () => {
+    const target = perBotLocalVmTarget("bot-a");
+    const command = [
+      "docker",
+      ...containerRunArgs("docker", "secret", target, {
+        platform: "linux",
+        resources: { memoryGb: 4, cpus: 2 },
+        hostUser: null,
+        exposure: { publish: [{ guest: 8765 }, { guest: 9222, host: 19222 }] },
+      }),
+    ].join(" ");
+
+    expect(command).toContain("-p 0.0.0.0::8765");
+    expect(command).toContain("-p 0.0.0.0:19222:9222");
+    expect(command).toContain("-p 127.0.0.1::6901");
   });
 
   it("does not invent Docker commands when no runtime was detected", () => {

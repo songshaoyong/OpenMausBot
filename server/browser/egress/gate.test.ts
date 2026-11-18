@@ -185,6 +185,65 @@ describe("egress gate", () => {
     }
   });
 
+  it("sends desktop.localhost into the private desktop and leaves localhost on this computer", async () => {
+    let hostHits = 0;
+    const host = NodeNet.createServer((socket) => { hostHits += 1; socket.end("host"); });
+    await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", resolve));
+    const hostPort = (host.address() as NodeNet.AddressInfo).port;
+    const seen: number[] = [];
+    const desk = NodeNet.createServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) => desk.listen(0, "127.0.0.1", resolve));
+    const deskPort = (desk.address() as NodeNet.AddressInfo).port;
+    const opened = await openGate({
+      decide: (target, addresses) => refusalFor(target, addresses, { ...serverRules, host: "desktop" }, ownAddresses(interfaces())),
+      intoDesktop: (port) => {
+        seen.push(port);
+        return Promise.resolve(NodeNet.connect(deskPort, "127.0.0.1"));
+      },
+    });
+    gates.push(opened);
+    const step = async <T>(label: string, work: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([work, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`timed out: ${label}`)), 1000); })]);
+      } finally { clearTimeout(timer); }
+    };
+    try {
+      const desktop = await step("desktop", connectThrough(opened.port, domainTarget("desktop.localhost", 8000)));
+      expect(desktop.code).toBe(0);
+      expect(seen).toEqual([8000]);
+      expect(hostHits).toBe(0);
+      desktop.socket.destroy();
+
+      const local = await step("host", connectThrough(opened.port, ipv4Target("127.0.0.1", hostPort)));
+      expect(local.code).toBe(0);
+      local.socket.destroy();
+      expect(hostHits).toBe(1);
+      expect(seen).toEqual([8000]);
+    } finally {
+      await new Promise<void>((resolve) => desk.close(() => resolve()));
+      await new Promise<void>((resolve) => host.close(() => resolve()));
+    }
+  });
+
+  it("refuses desktop.localhost when this browser has no private desktop, without opening that port here", async () => {
+    let hostHits = 0;
+    const host = NodeNet.createServer((socket) => { hostHits += 1; socket.end("host"); });
+    await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", resolve));
+    const hostPort = (host.address() as NodeNet.AddressInfo).port;
+    const refusals: Array<[GateTarget, string]> = [];
+    try {
+      const { port } = await gate({ ...serverRules, host: "desktop" }, refusals);
+      const { code, socket } = await connectThrough(port, domainTarget("desktop.localhost", hostPort));
+      socket.destroy();
+      expect(code).toBe(2);
+      expect(hostHits).toBe(0);
+      expect(refusals).toEqual([[{ host: "desktop.localhost", port: hostPort }, "desktop" satisfies Refusal]]);
+    } finally {
+      await new Promise<void>((resolve) => host.close(() => resolve()));
+    }
+  });
+
   it("connects only to the addresses it checked, so a name that resolves elsewhere later changes nothing", async () => {
     let lookups = 0;
     // First answer public, then loopback: a rebinding name. The gate resolves once and checks what it connects to.

@@ -5,7 +5,8 @@ import { Switch } from "./SettingsPrimitives";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { waitForLocalVmReady } from "@/lib/local-vm-readiness";
-import { CalendarClock, ChevronRight, Columns2, Globe, Hand, Loader2, Maximize2, Monitor, Moon, Power, Settings, X } from "lucide-react";
+import { copyText } from "@/lib/copy-text";
+import { CalendarClock, ChevronRight, Columns2, Globe, Hand, Loader2, Maximize2, Monitor, Moon, Power, Settings, Share2, X } from "lucide-react";
 import { api, ApiError, currentTaskBot, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { setAdvancedMode, useAdvancedMode } from "@/lib/interface-mode";
 import { SIMPLE_ONLY } from "@/lib/simple-only";
@@ -107,6 +108,8 @@ interface LocalVmStatus {
   problem: string | null;
   viewer_url: string;
   target_key: string;
+  /** Links to hand to someone else; null until the server's owner sets where this desktop is shared. */
+  share?: { viewer: string | null; services: string | null } | null;
 }
 
 const computerControlSnapshotSchema = z.object({
@@ -242,7 +245,7 @@ export function ComputerPanel({
   const [vpsStatus, setVpsStatus] = useState<VpsComputerStatus | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<
-    "join" | "sleep" | "provision" | "vps-replace" | "vm-start" | "vm-create" | "vm-recreate" | "vm-delete" | null
+    "join" | "sleep" | "provision" | "vps-replace" | "vm-start" | "vm-stop" | "vm-create" | "vm-recreate" | "vm-delete" | "share" | null
   >(null);
   const [controlPending, setControlPending] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -958,7 +961,21 @@ export function ComputerPanel({
       .finally(() => setPending(null));
   };
 
-  const runVmAction = async (action: "vm-start" | "vm-create" | "vm-recreate" | "vm-delete") => {
+  /** Copies the link a colleague opens: the desktop's own viewer page, with its current password.
+   * A plain-LAN page has no navigator.clipboard, so this goes through the shared fallback chain. */
+  const copyShareLink = async () => {
+    const link = vmStatus?.share?.viewer;
+    if (!link) return;
+    const result = await copyText(link);
+    if (result !== "copied") {
+      setError(t("computer.shareVmFailed"));
+      return;
+    }
+    setPending("share");
+    setTimeout(() => setPending((current) => (current === "share" ? null : current)), 2000);
+  };
+
+  const runVmAction = async (action: "vm-start" | "vm-stop" | "vm-create" | "vm-recreate" | "vm-delete") => {
     if (
       (action === "vm-recreate" || action === "vm-delete") &&
       !window.confirm(
@@ -974,6 +991,15 @@ export function ComputerPanel({
     setError(null);
     vmReadinessAttempts.current = 0;
     try {
+      if (action === "vm-stop") {
+        const stopped: LocalVmStatus = await api(
+          vmStatus?.mode !== "per-bot" ? "/api/local-computer/stop" : `/api/bots/${bot.id}/local-computer/stop`,
+          { method: "POST", body: "{}", signal: controller.signal },
+        );
+        setVmStatus(stopped);
+        setPhase("vm-unavailable");
+        return;
+      }
       if (action === "vm-recreate" || action === "vm-delete") {
         await api(`/api/bots/${bot.id}/local-computer/remove`, {
           method: "POST",
@@ -1307,6 +1333,29 @@ export function ComputerPanel({
             {phase === "local" && <span className="text-[11px]">{t("computer.badge.local")}</span>}
             {liveHere && <span className="flex items-center gap-1.5 text-[11px] font-medium text-ink"><span className="size-1.5 rounded-full bg-success" />{t("computer.inControl")}</span>}
             {phase === "vm" && !liveHere && <span className="text-[11px]">{t("vm.dest.vm")}</span>}
+            {phase === "vm" && canManageVm && vmStatus?.share?.viewer && (
+              <button
+                type="button"
+                onClick={() => void copyShareLink()}
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-ink-secondary hover:bg-raised-hover hover:text-ink"
+                title={t("computer.shareVmTitle")}
+              >
+                <Share2 size={12} />
+                {t(pending === "share" ? "computer.shareVmCopied" : "computer.shareVm")}
+              </button>
+            )}
+            {phase === "vm" && canManageVm && (
+              <button
+                type="button"
+                onClick={() => void runVmAction("vm-stop")}
+                disabled={pending !== null || profileBot.busy}
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-ink-secondary hover:bg-raised-hover hover:text-ink disabled:opacity-50"
+                title={profileBot.busy ? t("computer.stopVmBlocked") : t("computer.stopVmTitle")}
+              >
+                {pending === "vm-stop" ? <Loader2 size={12} className="animate-spin" /> : <Power size={12} />}
+                {t(pending === "vm-stop" ? "computer.stoppingVm" : "computer.stopVm")}
+              </button>
+            )}
             {(phase === "show-ready-boat" || phase === "show-sleeping-boat" || phase === "show-pending-boat") && (
               <span className="text-[11px]">{t("computer.badge.autoBoat")}</span>
             )}

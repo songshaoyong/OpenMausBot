@@ -14,6 +14,7 @@ import { RelayTimeout, relay, relayCommand, relayInput } from "../browser-relay.
 import { browserSteps } from "../browser-steps.ts";
 import { BrowserLive } from "../browser-live.ts";
 import { browserEgress, type EgressSetup } from "../browser/egress/registry.ts";
+import { openPrivateDesktopPort } from "../desktop-loopback.ts";
 import {
   agentBrowserIntegration,
   BUILT_IN_BROWSER_SYSTEM_PROMPT,
@@ -82,6 +83,10 @@ export interface BrowserHostDeps {
   audienceOf?(threadId: string): Audience;
   /** The box every Chrome of the bots' browsers runs in (a Team Cloud's), or none. */
   browserBox?(seccompFd: number, ro: readonly string[]): LauncherBox | null;
+  /** Host port of this bot's own Local VM viewer, once that desktop has been seen running on loopback. */
+  localVmViewerPort?(botId: string): number | null;
+  /** This bot's running private desktop, for desktop.localhost. Absent when that desktop is not running. */
+  runningLocalVm?(botId: string): { runtime: "docker" | "podman"; containerName: string } | null;
 }
 
 /** The lent computer's connection for a browser's pages, under the rule for everything it lends: only while the last
@@ -216,7 +221,25 @@ export function createBrowserHost(deps: BrowserHostDeps) {
   // workspace's network is the operator's, so its stored switch and allow-list are ignored, like MausBot Cloud's.
   const hostedServer = egressHost === "server" && Boolean(deps.HOSTED_WORKSPACE);
   const sitesSwitch = egressHost === "server" && !hostedServer;
-  browserEgress.configure({ host: egressHost, config: () => (hostedServer ? undefined : cfg.browserEngine?.egress), ...(device ? { device } : {}) });
+  const botForBrowserSession = (session: string): string | null => {
+    for (const [key, guest] of temporaryBrowserSessions) if (guest === session) return key.replace(/--(?:room|member)-[0-9a-f]{16}$/, "");
+    for (const bot of store.bots) {
+      if (audiences.variants().some((suffix) => browserSessionId(bot.id + suffix, "") === session)) return bot.id;
+    }
+    return null;
+  };
+  browserEgress.configure({
+    host: egressHost,
+    config: () => (hostedServer ? undefined : cfg.browserEngine?.egress),
+    ...(device ? { device } : {}),
+    ownDesktop: (session, port) => deps.localVmViewerPort?.(botForBrowserSession(session) ?? "") === port,
+    intoDesktop: async (session, port) => {
+      const vm = deps.runningLocalVm?.(botForBrowserSession(session) ?? "");
+      if (!vm) return null;
+      try { return openPrivateDesktopPort(vm.runtime, vm.containerName, port); }
+      catch { return null; }
+    },
+  });
   /** A live bot's, profile's or temporary browser of this data dir, for any audience. */
   const belongs = (session: string) => isTemporaryBrowserSession(session) || audiences.variants().some((suffix) =>
     store.bots.some((bot) => browserSessionId(bot.id + suffix, "") === session)

@@ -11,7 +11,7 @@ export { addressClass, ownAddresses, type AddressClass };
 export type EgressHost = "desktop" | "server" | "cloud";
 
 /** `home-network` and `port` come from the person's own computer when My Cloud's browsing goes out through it. */
-export type Refusal = "omb" | "this-computer" | "local-network" | "link-local" | "metadata" | "reserved" | "rebinding" | "reddit" | "home-network" | "port";
+export type Refusal = "omb" | "this-computer" | "local-network" | "link-local" | "metadata" | "reserved" | "rebinding" | "reddit" | "home-network" | "port" | "desktop";
 
 /** How a refusal reads in the page-health line. */
 export const REFUSAL_TEXT: Record<Refusal, string> = {
@@ -25,6 +25,7 @@ export const REFUSAL_TEXT: Record<Refusal, string> = {
   reddit: "Reddit",
   "home-network": "the person's own computer or home network",
   port: "a port other than 80 and 443, which the person's computer does not open for bots",
+  desktop: "this bot's private desktop, which is not running",
 };
 
 const family = (address: string) => (isIP(address) === 6 ? "ipv6" : "ipv4");
@@ -48,6 +49,11 @@ export function parseSocks5Proxy(value: string | undefined): Socks5Proxy | null 
 /** An address literal, or a name RFC 6761 and Chrome resolve to loopback themselves. */
 export function namesThisMachine(host: string): boolean {
   return isIP(host) !== 0 || /^(?:[^.]+\.)*localhost\.?$/i.test(host);
+}
+
+/** The private desktop's own loopback, as a name. `localhost` and `127.0.0.1` stay this computer. */
+export function isPrivateDesktopName(host: string): boolean {
+  return /^desktop\.localhost\.?$/i.test(host);
 }
 
 /** `browserEngine.egress` in config.json. */
@@ -110,6 +116,9 @@ export interface EgressRules {
   ownPort(port: number): boolean;
   /** Whether every listener on this loopback port belongs to a bot's processes. */
   botPort(port: number): Promise<boolean>;
+  /** This browser session's own Local VM viewer, on loopback only. It may be the reserved noVNC port (6080).
+   * It never opens any other OpenMausBot listener, and never through a public name. */
+  ownDesktop?(port: number): boolean;
   /** Desktop: the person's local network. Self-hosted servers: this server's own sites and its local network. */
   localNetwork: boolean;
   /** Self-hosted servers: `browserEngine.egress.allow`. */
@@ -146,10 +155,13 @@ export async function refusalFor(
       }
       return "local-network";
     }
-    if (rules.ownPort(port)) return "omb";
+    // A bot's own desktop viewer is the one OpenMausBot listener its browser may open, and only as loopback by a
+    // loopback name. Every other listener (the API, the dev server, another bot's desktop) stays closed.
+    const ownDesktop = kind === "loopback" && namesThisMachine(host) && rules.ownDesktop?.(port) === true && (!rules.ownPort(port) || port === 6080);
+    if (rules.ownPort(port) && !ownDesktop) return "omb";
     // Desktop dev servers are reached by name or address, never through a public name that points here.
     if (rules.host === "desktop") {
-      if (namesThisMachine(host)) continue;
+      if (namesThisMachine(host) || ownDesktop) continue;
       return "rebinding";
     }
     // The owner's switch opens this server's own sites, but a public name pointing at loopback (DNS rebinding) stays
@@ -157,6 +169,7 @@ export async function refusalFor(
     if (rules.host === "server" && rules.localNetwork && (kind === "this-machine" || namesThisMachine(host))) continue;
     if (rules.host === "server" && rules.allowed(address, port)) continue;
     if (await rules.botPort(port)) continue;
+    if (ownDesktop) continue;
     return "this-computer";
   }
   return null;
