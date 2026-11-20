@@ -28,6 +28,7 @@ import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { routineRunLabel, routineRunTone } from "@/lib/routine-display";
 import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
 import { BrowserPanel } from "./BrowserPanel";
+import { Select } from "./Select";
 import { usePanelPage, type PanelPage } from "@/lib/page-open";
 const DataPanel = lazy(() => import("./data/DataPanel").then((module) => ({ default: module.DataPanel })));
 const loadLiveDesktop = () => import("./LiveDesktop").then((module) => ({ default: module.LiveDesktop }));
@@ -139,7 +140,9 @@ export function ComputerPanel({
   const surfaceReady = livePlace !== "auto" || autoSurfaceCurrent;
   const bot = { ...threadBot, computer: livePlace === "auto"
     ? autoSurfaceCurrent ? autoSurface.surface : undefined : livePlace };
-  const viewerConnectionKey = `${bot.id}:${bot.threadId}:${bot.computer}:${bot.cloudBackend ?? "box"}`;
+  const sharedDesktops = state.config?.localVmSharedDesktops ?? [];
+  const usesSharedDesktop = Boolean(bot.localVmSharedDesktop);
+  const viewerConnectionKey = `${bot.id}:${bot.threadId}:${bot.computer}:${bot.cloudBackend ?? "box"}:${bot.localVmSharedDesktop ?? ""}`;
   const viewerConnection = useRef(viewerConnectionKey);
   viewerConnection.current = viewerConnectionKey;
   const desktopJoin = useRef<AbortController | null>(null);
@@ -993,7 +996,7 @@ export function ComputerPanel({
     try {
       if (action === "vm-stop") {
         const stopped: LocalVmStatus = await api(
-          vmStatus?.mode !== "per-bot" ? "/api/local-computer/stop" : `/api/bots/${bot.id}/local-computer/stop`,
+          vmStatus?.mode !== "per-bot" && !usesSharedDesktop ? "/api/local-computer/stop" : `/api/bots/${bot.id}/local-computer/stop`,
           { method: "POST", body: "{}", signal: controller.signal },
         );
         setVmStatus(stopped);
@@ -1008,7 +1011,7 @@ export function ComputerPanel({
         });
       }
       if (action !== "vm-delete") {
-        const lifecyclePath = action === "vm-start" && vmStatus?.mode !== "per-bot"
+        const lifecyclePath = action === "vm-start" && vmStatus?.mode !== "per-bot" && !usesSharedDesktop
           ? "/api/local-computer/start"
           : `/api/bots/${bot.id}/local-computer/${action === "vm-start" ? "start" : "run"}`;
         const started: LocalVmStatus = await api(lifecyclePath, {
@@ -1327,6 +1330,27 @@ export function ComputerPanel({
         </div>
       ) : (
       <div {...tabPanelProps("computer")} className={cn("flex-1 overflow-y-auto px-5 pb-5", TAB_PANEL_FOCUS)}>
+          {bot.computer === "vm" && sharedDesktops.length > 0 && (
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <label htmlFor={`${bot.id}-shared-desktop`} className="text-[12px] font-medium text-ink">{t("vm.shared.pick")}</label>
+              <Select
+                id={`${bot.id}-shared-desktop`}
+                size="sm"
+                value={bot.localVmSharedDesktop ?? ""}
+                disabled={pending !== null || profileBot.busy}
+                onChange={(event) => {
+                  setError(null);
+                  setPhase("checking");
+                  dispatch({ type: "updateBot", botId: bot.id, patch: { localVmSharedDesktop: event.target.value || null } });
+                }}
+              >
+                <option value="">{t("vm.shared.own")}</option>
+                {sharedDesktops.map((desktop) => <option key={desktop.id} value={desktop.id}>{desktop.name}</option>)}
+                {bot.localVmSharedDesktop && !sharedDesktops.some((desktop) => desktop.id === bot.localVmSharedDesktop)
+                  ? <option value={bot.localVmSharedDesktop} disabled>{t("vm.shared.missingSelection")}</option> : null}
+              </Select>
+            </div>
+          )}
           <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
             <span>{t("computer.screenOf", { name: bot.name })}</span>
             {currentTeamComputer && <span className="text-[11px]">{autoView.short}</span>}
@@ -1492,7 +1516,7 @@ export function ComputerPanel({
                     {pending === "vm-start" && <Loader2 size={13} className="animate-spin" />}
                     {t(pending === "vm-start" ? "vm.setup.starting" : "vm.setup.start")}
                   </button>
-                ) : canManageVm && vmStatus?.mode === "per-bot" && vmStatus.image && vmStatus.create_supported ? (
+                ) : canManageVm && vmStatus?.mode === "per-bot" && !usesSharedDesktop && vmStatus.image && vmStatus.create_supported ? (
                   <button
                     onClick={() => void runVmAction(vmStatus.container === "missing" ? "vm-create" : "vm-recreate")}
                     disabled={pending !== null}
@@ -1586,6 +1610,7 @@ export function ComputerPanel({
         {advanced &&
           phase === "vm" &&
           vmStatus?.mode === "per-bot" &&
+          !usesSharedDesktop &&
           window.ogb?.desktopWorkspace &&
           onOpenVmWorkspace && (
             <button
@@ -1630,7 +1655,7 @@ export function ComputerPanel({
             {t(control.held ? "computer.fullScreen" : "computer.takeControl")}
           </button>
         )}
-        {advanced && canManageVm && phase === "vm" && vmStatus?.mode === "per-bot" && (
+        {advanced && canManageVm && phase === "vm" && vmStatus?.mode === "per-bot" && !usesSharedDesktop && (
           <button
             onClick={() => void runVmAction("vm-delete")}
             disabled={pending !== null || profileBot.busy}

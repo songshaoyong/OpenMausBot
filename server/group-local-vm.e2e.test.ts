@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { writeFileAtomic } from "./atomic.ts";
+import { perBotLocalVmTarget, sharedDesktopLocalVmTarget } from "./container-computer.ts";
 import { cloudHomePrompt } from "./system-prompt.ts";
 import { availableTools, catalogProfileFromEnv } from "./drivers/agents-catalog.ts";
 import { CONTROL_BUSY, CONTROL_REFUSAL_PLAIN, controlRefusal, createControlClient } from "./control-client.ts";
@@ -1253,5 +1254,100 @@ describe("Group Local VM ownership on the real isolated server", () => {
     vmState({ noContainers: true });
     await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
     vmState();
+  });
+
+  it("creates one real shared desktop container for every assigned bot", async () => {
+    vmState({ containers: [] });
+    rmSync(dumpFile, { force: true });
+    rmSync(finishFile, { force: true });
+    const created = await api("POST", "/api/local-computer/shared-desktops", { name: "Fixture shared" });
+    expect(created.desktops).toHaveLength(1);
+    const desktop = created.desktops[0];
+    const target = sharedDesktopLocalVmTarget(desktop.id);
+    const { bot: first } = await api("POST", "/api/bots", { name: "Shared first" });
+    const { bot: second } = await api("POST", "/api/bots", { name: "Shared second" });
+    try {
+      for (const bot of [first, second]) {
+        await api("PATCH", `/api/bots/${bot.id}`, {
+          computer: "vm",
+          localVmSharedDesktop: desktop.id,
+          browser: false,
+        });
+      }
+
+      await api("POST", `/api/bots/${first.id}/messages`, { text: "Use our shared container" });
+      expect(computer(await dump())).toBeTruthy();
+      writeFileSync(finishFile, "finish");
+      await idle(first.id);
+      const afterFirst = JSON.parse(readFileSync(stateFile, "utf8"));
+      expect(afterFirst.containers).toContain(target.key);
+
+      rmSync(dumpFile, { force: true });
+      await api("POST", `/api/bots/${second.id}/messages`, { text: "Continue on the same container" });
+      expect(computer(await dump())).toBeTruthy();
+      writeFileSync(finishFile, "finish");
+      await idle(second.id);
+      const afterSecond = JSON.parse(readFileSync(stateFile, "utf8"));
+      expect(afterSecond.containers.filter((key: string) => key === target.key)).toHaveLength(1);
+
+      const listed = await api("GET", "/api/local-computer/shared-desktops");
+      expect(listed.desktops[0].users.map((user: any) => user.id).sort()).toEqual([first.id, second.id].sort());
+
+      const refused = await fetch(`${base}/api/local-computer/shared-desktops/${desktop.id}/remove`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(refused.status).toBe(409);
+    } finally {
+      writeFileSync(finishFile, "finish");
+      for (const bot of [first, second]) {
+        await api("PATCH", `/api/bots/${bot.id}`, { localVmSharedDesktop: null });
+        await api("POST", `/api/bots/${bot.id}/interrupt`, {});
+        await idle(bot.id);
+        await api("DELETE", `/api/bots/${bot.id}`);
+      }
+      await api("POST", `/api/local-computer/shared-desktops/${desktop.id}/remove`, {});
+      vmState();
+    }
+  });
+
+  it("migrates an independent desktop into a new shared container", async () => {
+    vmState({ containers: [] });
+    rmSync(dumpFile, { force: true });
+    rmSync(finishFile, { force: true });
+    await api("PATCH", "/api/config", { localVm: { mode: "per-bot", maxInstances: 2 } });
+    const { bot } = await api("POST", "/api/bots", { name: "Migrate me" });
+    const sourceTarget = perBotLocalVmTarget(bot.id);
+    try {
+      await api("PATCH", `/api/bots/${bot.id}`, { computer: "vm", browser: false });
+      await api("POST", `/api/bots/${bot.id}/messages`, { text: "Create my desktop" });
+      expect(computer(await dump())).toBeTruthy();
+      writeFileSync(finishFile, "finish");
+      await idle(bot.id);
+      expect(JSON.parse(readFileSync(stateFile, "utf8")).containers).toContain(sourceTarget.key);
+
+      const migrated = await api("POST", "/api/local-computer/desktops/migrate", { botId: bot.id, name: "Migrated shared" });
+      const shared = migrated.desktops.find((desktop: any) => desktop.kind === "shared" && desktop.name === "Migrated shared");
+      expect(shared).toBeTruthy();
+      const sharedTarget = sharedDesktopLocalVmTarget(shared.id);
+      expect(shared.users.map((user: any) => user.id)).toEqual([bot.id]);
+      const bots = await api("GET", "/api/bots?messages=0");
+      expect(bots.bots.find((candidate: any) => candidate.id === bot.id)?.localVmSharedDesktop).toBe(shared.id);
+      const afterMigration = JSON.parse(readFileSync(stateFile, "utf8"));
+      expect(afterMigration.containers).toContain(sharedTarget.key);
+      expect(afterMigration.containers).toContain(sourceTarget.key);
+    } finally {
+      writeFileSync(finishFile, "finish");
+      await api("POST", `/api/bots/${bot.id}/interrupt`, {});
+      await idle(bot.id);
+      await api("PATCH", `/api/bots/${bot.id}`, { localVmSharedDesktop: null });
+      const listed = await api("GET", "/api/local-computer/desktops");
+      const shared = listed.desktops.find((desktop: any) => desktop.kind === "shared" && desktop.name === "Migrated shared");
+      if (shared) await api("POST", `/api/local-computer/shared-desktops/${shared.id}/remove`, {});
+      await api("DELETE", `/api/bots/${bot.id}`);
+      await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
+      vmState();
+    }
   });
 });

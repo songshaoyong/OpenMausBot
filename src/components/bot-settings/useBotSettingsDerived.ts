@@ -46,6 +46,7 @@ export type BotPatch = Partial<
   >
 > & {
   computer?: Bot["computer"] | null;
+  localVmSharedDesktop?: string | null;
   connectorTools?: Bot["connectorTools"] | null;
   connectorScopes?: Bot["connectorScopes"] | null;
   phoneApps?: Bot["phoneApps"] | null;

@@ -204,6 +204,13 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
           return json(res, 409, { error: "Browser profiles changed in another window. Review the refreshed list and try again." });
         }
       }
+      if (patch.localVmSharedDesktops !== undefined) {
+        const retained = new Set(patch.localVmSharedDesktops.map((desktop) => desktop.id));
+        const users = store.bots.filter((bot) => bot.localVmSharedDesktop && !retained.has(bot.localVmSharedDesktop));
+        if (users.length) {
+          return json(res, 409, { error: `${users.map((bot) => bot.name).join(", ")} still use this shared desktop. Move them first.` });
+        }
+      }
       const disablingBuiltInBrowser = patch.features?.browser === false && builtInBrowserEnabled(cfg);
       const switchingBrowserEngine = patch.browserEngine?.engine !== undefined && patch.browserEngine.engine !== browserEngineKind(cfg);
       const removedBrowserProfileIds = patch.browserProfiles === undefined

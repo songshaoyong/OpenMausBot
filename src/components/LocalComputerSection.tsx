@@ -21,6 +21,7 @@ import { localizeComputerProblem } from "@/lib/computer-messages";
 import { computerInventoryRequest, jsonPostRequest, type ComputerApiRequest } from "@/lib/computer-requests";
 import { useStore } from "@/state/store";
 import { VpsComputersCard } from "./VpsComputersCard"; import { KeysLink } from "./keys/KeysLink";
+import { LocalVmDesktopsManager } from "./LocalVmDesktopsManager";
 
 type Action = "pull" | "run" | "start" | "stop" | "remove" | "recreate";
 
@@ -71,13 +72,6 @@ export interface LocalVmInventoryInstance {
   managed: boolean;
   problem: string | null;
   inUse: boolean;
-}
-
-interface LocalVmInventoryPayload {
-  instances: LocalVmInventoryInstance[];
-  maxInstances: number;
-  available: boolean;
-  problem: string | null;
 }
 
 export interface CloudComputerInventoryInstance {
@@ -771,13 +765,6 @@ export function LocalComputerSection({ privateOnly = false }: { privateOnly?: bo
   const [error, setError] = useState<string | null>(null);
   const [policyPending, setPolicyPending] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [inventory, setInventory] = useState<LocalVmInventoryInstance[]>([]);
-  const [inventoryMax, setInventoryMax] = useState(2);
-  const [inventoryLoading, setInventoryLoading] = useState(false);
-  const [inventoryError, setInventoryError] = useState<string | null>(null);
-  const [inventoryUnavailableReason, setInventoryUnavailableReason] = useState<string | null>(null);
-  const [deletingBotId, setDeletingBotId] = useState<string | null>(null);
-  const [inventoryRefreshKey, setInventoryRefreshKey] = useState(0);
   const [cloudInventory, setCloudInventory] = useState<CloudComputerInventoryInstance[]>([]);
   const [cloudConfigured, setCloudConfigured] = useState<boolean | null>(null);
   const [cloudLoading, setCloudLoading] = useState(true);
@@ -805,17 +792,6 @@ export function LocalComputerSection({ privateOnly = false }: { privateOnly?: bo
     setStatus(body as Status);
     setError(null);
     return body as Status;
-  }, []);
-
-  const refreshInventory = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch(...computerInventoryRequest("local-vms", signal));
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error ?? t("vm.err.inventory", { code: response.status }));
-    const payload = body as LocalVmInventoryPayload;
-    setInventory(payload.instances);
-    setInventoryMax(payload.maxInstances);
-    setInventoryUnavailableReason(payload.available ? null : (localizeComputerProblem(payload.problem) ?? t("vm.err.runtimeUnavailable")));
-    setInventoryError(null);
   }, []);
 
   const refreshCloudInventory = useCallback(async (signal?: AbortSignal) => {
@@ -884,28 +860,6 @@ export function LocalComputerSection({ privateOnly = false }: { privateOnly?: bo
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [cloudHome, refresh, refreshKey]);
-
-  useEffect(() => {
-    if (status?.mode !== "per-bot") {
-      setInventory([]);
-      setInventoryLoading(false);
-      setInventoryError(null);
-      setInventoryUnavailableReason(null);
-      return;
-    }
-    const controller = new AbortController();
-    setInventoryLoading(true);
-    void refreshInventory(controller.signal)
-      .catch((e) => {
-        if (!(e instanceof DOMException && e.name === "AbortError")) {
-          setInventoryError(e instanceof Error ? e.message : String(e));
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setInventoryLoading(false);
-      });
-    return () => controller.abort();
-  }, [inventoryRefreshKey, refreshInventory, status?.mode]);
 
   useEffect(() => {
     if (privateOnly) return;
@@ -1032,31 +986,6 @@ export function LocalComputerSection({ privateOnly = false }: { privateOnly?: bo
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? t("vm.idle.error"));
     setStatus((current) => current ? { ...current, idle_timeout_ms: idleTimeoutMinutes * 60_000 } : current);
-  };
-
-  const deletePerBotVm = async (instance: LocalVmInventoryInstance) => {
-    if (!instance.managed) {
-      setInventoryError(t("vm.unmanagedError"));
-      return;
-    }
-    const request = confirmComputerAction(
-      perBotLocalVmDeletePlan(instance),
-      (message) => window.confirm(message),
-    );
-    if (!request) return;
-    setDeletingBotId(instance.botId);
-    setInventoryError(null);
-    try {
-      const response = await fetch(...request);
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error ?? t("vm.deleteError"));
-      await refreshInventory();
-      setAnnouncement(t("vm.announce.deletedBot", { name: instance.name }));
-    } catch (e) {
-      setInventoryError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDeletingBotId(null);
-    }
   };
 
   const actOnCloudComputer = async (action: CloudAction, instance: CloudComputerInventoryInstance) => {
@@ -1241,7 +1170,6 @@ export function LocalComputerSection({ privateOnly = false }: { privateOnly?: bo
             onClick={() => {
               setLoading(true);
               setRefreshKey((key) => key + 1);
-              setInventoryRefreshKey((key) => key + 1);
             }}
             disabled={loading || pending !== null}
             className="settings-quiet cursor-pointer last:-me-1.5 disabled:opacity-40"
@@ -1382,18 +1310,7 @@ export function LocalComputerSection({ privateOnly = false }: { privateOnly?: bo
         </div>
       </Card>
 
-      {perBot && (
-        <LocalVmInventoryCard
-          instances={inventory}
-          maxInstances={inventoryMax || status?.max_instances || 2}
-          loading={inventoryLoading}
-          deletingBotId={deletingBotId}
-          error={inventoryError}
-          unavailableReason={inventoryUnavailableReason}
-          onRefresh={() => setInventoryRefreshKey((key) => key + 1)}
-          onDelete={(instance) => void deletePerBotVm(instance)}
-        />
-      )}
+      <LocalVmDesktopsManager />
 
       {unavailable && (
         <Card>

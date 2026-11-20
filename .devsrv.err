@@ -1,12 +1,8 @@
 local requests: OMB_DEV_TRUST_LOCAL_BROWSER=1: browsers on this machine act as the owner (development only)
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
+[announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
@@ -14,36 +10,73 @@ local requests: OMB_DEV_TRUST_LOCAL_BROWSER=1: browsers on this machine act as t
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T03:35:00Z bot 72a84e88-1771-40da-bd53-592e366afbb9 thread 95775150-0286-4b1f-b83a-ccb720039a95 deepseekAgent ok 13m42s: queue 5.3s (dispatch), handshake 15s, ttft 23s, model 5m05s, tool 8m38s [terminal 25x 7m21s 4 failed; browser 27x 1m16s]
+[perf] slow turn 2026-11-20T04:43:38Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 11m18s: handshake 11s, ttft 18s, model 6m30s, tool 4m48s [tool 49x 6m12s; terminal 12x 1m59s]
+[perf] slow turn 2026-11-20T04:37:33Z bot ? thread dfb06197-be9b-421f-b93e-c8a5f0f955f3 cursorAgent ok 22m34s: handshake 1m42s, ttft 1m47s, model 20m52s, tool 1m42s [tool 55x 1m43s; terminal 5x 8.1s; files 15x 5.7s]
+[perf] slow turn 2026-11-20T04:54:56Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 9m06s: handshake 27s, ttft 31s, model 7m13s, tool 1m52s [tool 24x 5m55s; terminal 5x 50s; files 3x 26s]
+[perf] slow turn 2026-11-20T05:03:31Z bot ? thread dfb06197-be9b-421f-b93e-c8a5f0f955f3 deepseekAgent ok 5m06s: handshake 16s, ttft 23s, model 2m36s, tool 2m30s [terminal 22x 2m24s 2 failed; computer 5x 6.1s; bots 1x 33ms]
+[model-manifest] could not refresh the model list (fetch failed); keeping the current one
+[perf] slow turn 2026-11-20T05:08:42Z bot ? thread dfb06197-be9b-421f-b93e-c8a5f0f955f3 cursorAgent ok 6m04s: handshake 2m09s, ttft 2m12s, model 5m28s, tool 36s [files 2x 44s; tool 14x 15s]
+[perf] slow turn 2026-11-20T05:08:46Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 11m26s: handshake 2m01s, ttft 2m08s, model 8m08s, tool 3m18s [terminal 18x 2m12s; tool 34x 2m04s]
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
+[model-manifest] could not refresh the model list (fetch failed); keeping the current one
+browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
+    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
+    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
+    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
+    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
+    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12784:9) {
+  status: 503,
+  errorKey: 'serverError.browser.restartingUnresponsive'
+}
+browser-live: reset profile-5deec4ba1e59483891163f8b768aa208 after a status read the browser never answered; reconnecting starts a fresh session
+browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
+    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
+    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
+    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
+    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
+    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12784:9) {
+  status: 503,
+  errorKey: 'serverError.browser.restartingUnresponsive'
+}
+browser-live: reset profile-5deec4ba1e59483891163f8b768aa208 after a status read the browser never answered; reconnecting starts a fresh session
+browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
+    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
+    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
+    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
+    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
+    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12784:9) {
+  status: 503,
+  errorKey: 'serverError.browser.restartingUnresponsive'
+}
+browser-live: reset profile-5deec4ba1e59483891163f8b768aa208 after a status read the browser never answered; reconnecting starts a fresh session
+browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
+    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
+    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
+    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
+    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
+    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12784:9) {
+  status: 503,
+  errorKey: 'serverError.browser.restartingUnresponsive'
+}
+browser-live: reset profile-5deec4ba1e59483891163f8b768aa208 after a status read the browser never answered; reconnecting starts a fresh session
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[perf] slow turn 2026-11-19T04:24:37Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 14m57s: handshake 9.6s, ttft 15s, model 14m04s, tool 53s [tool 83x 32s; terminal 11x 23s; files 3x 634ms]
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
+[perf] slow turn 2026-11-20T06:11:36Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 deepseekAgent ok 16m44s: queue 78ms (dispatch), handshake 14s, ttft 21s, model 8m30s, tool 8m13s [terminal 61x 8m00s; files 31x 13s 1 failed; tool 3x 1.2s 2 failed]
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (it did not answer in time); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T05:23:00Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 16m51s: handshake 10s, ttft 18s, model 14m56s, tool 1m56s [tool 112x 2m13s; terminal 18x 41s; files 1x 142ms]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
 browser-live: AbortError: The operation was aborted
     at abortChildProcess (node:child_process:759:27)
     at AbortSignal.onAbortListener (node:child_process:829:7)
@@ -56,7 +89,7 @@ browser-live: AbortError: The operation was aborted
     at ServerResponse.<anonymous> (file:///E:/projecte/OpenMausBot/server/browser-live.ts:789:42)
     at Object.onceWrapper (node:events:630:28) {
   code: 'ABORT_ERR',
-  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe stream status --json --no-webmcp',
+  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe open https://passport.jd.com/new/login.aspx?ReturnUrl=https%3A%2F%2Fwww.jd.com%2F&czLogin=1 --json --no-webmcp',
   stdout: '',
   stderr: '',
   [cause]: DOMException [AbortError]: This operation was aborted
@@ -71,141 +104,6 @@ browser-live: AbortError: The operation was aborted
       at Socket.emit (node:events:521:24)
       at TCP.<anonymous> (node:net:350:12)
 }
-browser-live: BrowserLiveError: The browser could not complete this action. Check that the browser engine is installed, then reconnect.
-    at BrowserLive.command (file:///E:/projecte/OpenMausBot/server/browser-live.ts:590:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:616:20)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503
-}
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[perf] slow turn 2026-11-19T06:51:40Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 24m22s: handshake 19s, ttft 29s, model 17m20s, tool 7m02s [tool 160x 14m12s; terminal 18x 1m07s]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-browser-live: AbortError: The operation was aborted
-    at abortChildProcess (node:child_process:759:27)
-    at AbortSignal.onAbortListener (node:child_process:829:7)
-    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:843:20)
-    at AbortSignal.dispatchEvent (node:internal/event_target:776:26)
-    at runAbort (node:internal/abort_controller:547:10)
-    at abortSignal (node:internal/abort_controller:518:3)
-    at AbortController.abort (node:internal/abort_controller:566:5)
-    at BrowserLive.close (file:///E:/projecte/OpenMausBot/server/browser-live.ts:431:18)
-    at ServerResponse.<anonymous> (file:///E:/projecte/OpenMausBot/server/browser-live.ts:789:42)
-    at Object.onceWrapper (node:events:630:28) {
-  code: 'ABORT_ERR',
-  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe stream status --json --no-webmcp',
-  stdout: '',
-  stderr: '',
-  [cause]: DOMException [AbortError]: This operation was aborted
-      at new DOMException (node:internal/per_context/domexception:76:18)
-      at AbortController.abort (node:internal/abort_controller:565:18)
-      at BrowserLive.close (file:///E:/projecte/OpenMausBot/server/browser-live.ts:431:18)
-      at ServerResponse.<anonymous> (file:///E:/projecte/OpenMausBot/server/browser-live.ts:789:42)
-      at Object.onceWrapper (node:events:630:28)
-      at ServerResponse.emit (node:events:509:28)
-      at emitCloseNT (node:_http_server:1089:10)
-      at Socket.onServerResponseClose (node:_http_server:289:5)
-      at Socket.emit (node:events:521:24)
-      at TCP.<anonymous> (node:net:350:12)
-}
-browser-live: BrowserLiveError: The browser could not complete this action. Check that the browser engine is installed, then reconnect.
-    at BrowserLive.command (file:///E:/projecte/OpenMausBot/server/browser-live.ts:590:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:616:20)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503
-}
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
-    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503,
-  errorKey: 'serverError.browser.restartingUnresponsive'
-}
-browser-live: reset of bot-254132a8-5a05-4342-bb07-fe3459b1a52b after a status read the browser never answered did not finish; the next command retries it
-browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
-    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503,
-  errorKey: 'serverError.browser.restartingUnresponsive'
-}
-browser-live: reset bot-254132a8-5a05-4342-bb07-fe3459b1a52b after a status read the browser never answered; reconnecting starts a fresh session
-browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
-    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503,
-  errorKey: 'serverError.browser.restartingUnresponsive'
-}
-browser-live: reset bot-254132a8-5a05-4342-bb07-fe3459b1a52b after a status read the browser never answered; reconnecting starts a fresh session
-browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
-    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503,
-  errorKey: 'serverError.browser.restartingUnresponsive'
-}
-browser-live: reset bot-254132a8-5a05-4342-bb07-fe3459b1a52b after a status read the browser never answered; reconnecting starts a fresh session
-browser-live: Error: Command failed: C:\Users\pc\.openmausbot\tools\agent-browser\0.36.0-omb.1\agent-browser.exe stream status --json --no-webmcp
-
-    at genericNodeError (node:internal/errors:985:15)
-    at wrappedFn (node:internal/errors:539:14)
-    at ChildProcess.exithandler (node:child_process:417:12)
-    at ChildProcess.emit (node:events:509:28)
-    at maybeClose (node:internal/child_process:1124:16)
-    at ChildProcess._handle.onexit (node:internal/child_process:306:5) {
-  code: 1,
-  killed: false,
-  signal: null,
-  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe stream status --json --no-webmcp',
-  stdout: '{"error":"Failed to connect: 由于目标计算机积极拒绝，无法连接。 (os error 10061)","success":false}\n',
-  stderr: ''
-}
-browser-live: BrowserLiveError: The browser could not complete this action. Check that the browser engine is installed, then reconnect.
-    at BrowserLive.command (file:///E:/projecte/OpenMausBot/server/browser-live.ts:590:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:616:20)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503
-}
-[perf] slow turn 2026-11-19T07:38:27Z bot 254132a8-5a05-4342-bb07-fe3459b1a52b thread bdade843-b802-4774-baea-7b562bc53cd9 cursorAgent ok 5m43s: queue 150ms (dispatch), handshake 18s, ttft 27s, model 2m19s, tool 3m24s [tool 8x 3m15s; terminal 2x 8.1s]
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 browser-live: AbortError: The operation was aborted
     at abortChildProcess (node:child_process:759:27)
@@ -216,8 +114,8 @@ browser-live: AbortError: The operation was aborted
     at abortSignal (node:internal/abort_controller:518:3)
     at AbortController.abort (node:internal/abort_controller:566:5)
     at BrowserLive.close (file:///E:/projecte/OpenMausBot/server/browser-live.ts:431:18)
-    at ServerResponse.<anonymous> (file:///E:/projecte/OpenMausBot/server/browser-live.ts:789:42)
-    at Object.onceWrapper (node:events:630:28) {
+    at BrowserLive.closeWhere (file:///E:/projecte/OpenMausBot/server/browser-live.ts:984:73)
+    at BrowserLive.closeForSession (file:///E:/projecte/OpenMausBot/server/browser-live.ts:977:49) {
   code: 'ABORT_ERR',
   cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe stream status --json --no-webmcp',
   stdout: '',
@@ -226,13 +124,13 @@ browser-live: AbortError: The operation was aborted
       at new DOMException (node:internal/per_context/domexception:76:18)
       at AbortController.abort (node:internal/abort_controller:565:18)
       at BrowserLive.close (file:///E:/projecte/OpenMausBot/server/browser-live.ts:431:18)
-      at ServerResponse.<anonymous> (file:///E:/projecte/OpenMausBot/server/browser-live.ts:789:42)
-      at Object.onceWrapper (node:events:630:28)
-      at ServerResponse.emit (node:events:509:28)
-      at emitCloseNT (node:_http_server:1089:10)
-      at Socket.onServerResponseClose (node:_http_server:289:5)
-      at Socket.emit (node:events:521:24)
-      at TCP.<anonymous> (node:net:350:12)
+      at BrowserLive.closeWhere (file:///E:/projecte/OpenMausBot/server/browser-live.ts:984:73)
+      at BrowserLive.closeForSession (file:///E:/projecte/OpenMausBot/server/browser-live.ts:977:49)
+      at BrowserLive.restartUnresponsive (file:///E:/projecte/OpenMausBot/server/browser-live.ts:764:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async BrowserLive.action (file:///E:/projecte/OpenMausBot/server/browser-live.ts:944:91)
+      at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:143:31
+      at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
 }
 browser-live: BrowserLiveError: The browser could not complete this action. Check that the browser engine is installed, then reconnect.
     at BrowserLive.command (file:///E:/projecte/OpenMausBot/server/browser-live.ts:590:13)
@@ -242,151 +140,14 @@ browser-live: BrowserLiveError: The browser could not complete this action. Chec
     at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
     at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
     at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
+    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12784:9) {
   status: 503
 }
-browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
-    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503,
-  errorKey: 'serverError.browser.restartingUnresponsive'
-}
-browser-live: reset bot-254132a8-5a05-4342-bb07-fe3459b1a52b after a status read the browser never answered; reconnecting starts a fresh session
-browser-live: BrowserUnresponsiveError: The browser stopped responding, so it is being restarted. The live view reconnects by itself.
-    at BrowserLive.connect (file:///E:/projecte/OpenMausBot/server/browser-live.ts:621:13)
-    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async BrowserLive.connectWhenFree (file:///E:/projecte/OpenMausBot/server/browser-live.ts:640:20)
-    at async BrowserLive.open (file:///E:/projecte/OpenMausBot/server/browser-live.ts:792:20)
-    at async file:///E:/projecte/OpenMausBot/server/routes/browser-viewers.ts:135:16
-    at async dispatchRoutes (file:///E:/projecte/OpenMausBot/server/routes/table.ts:32:17)
-    at async Server.handleRequest (file:///E:/projecte/OpenMausBot/server/index.ts:12749:9) {
-  status: 503,
-  errorKey: 'serverError.browser.restartingUnresponsive'
-}
-browser-live: reset bot-254132a8-5a05-4342-bb07-fe3459b1a52b after a status read the browser never answered; reconnecting starts a fresh session
-browser-live: Error: Command failed: C:\Users\pc\.openmausbot\tools\agent-browser\0.36.0-omb.1\agent-browser.exe tab close t2 --json --no-webmcp
-
-    at genericNodeError (node:internal/errors:985:15)
-    at wrappedFn (node:internal/errors:539:14)
-    at ChildProcess.exithandler (node:child_process:417:12)
-    at ChildProcess.emit (node:events:509:28)
-    at maybeClose (node:internal/child_process:1124:16)
-    at ChildProcess._handle.onexit (node:internal/child_process:306:5) {
-  code: 1,
-  killed: false,
-  signal: null,
-  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe tab close t2 --json --no-webmcp',
-  stdout: '{"success":false,"data":null,"error":"Tab t2 not found; run `agent-browser tab` to list open tabs"}\n',
-  stderr: ''
-}
-browser-live: Error: Command failed: C:\Users\pc\.openmausbot\tools\agent-browser\0.36.0-omb.1\agent-browser.exe tab close t2 --json --no-webmcp
-
-    at genericNodeError (node:internal/errors:985:15)
-    at wrappedFn (node:internal/errors:539:14)
-    at ChildProcess.exithandler (node:child_process:417:12)
-    at ChildProcess.emit (node:events:509:28)
-    at maybeClose (node:internal/child_process:1124:16)
-    at ChildProcess._handle.onexit (node:internal/child_process:306:5) {
-  code: 1,
-  killed: false,
-  signal: null,
-  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe tab close t2 --json --no-webmcp',
-  stdout: '{"success":false,"data":null,"error":"Tab t2 not found; run `agent-browser tab` to list open tabs"}\n',
-  stderr: ''
-}
-browser-live: Error: Command failed: C:\Users\pc\.openmausbot\tools\agent-browser\0.36.0-omb.1\agent-browser.exe tab close t3 --json --no-webmcp
-
-    at genericNodeError (node:internal/errors:985:15)
-    at wrappedFn (node:internal/errors:539:14)
-    at ChildProcess.exithandler (node:child_process:417:12)
-    at ChildProcess.emit (node:events:509:28)
-    at maybeClose (node:internal/child_process:1124:16)
-    at ChildProcess._handle.onexit (node:internal/child_process:306:5) {
-  code: 1,
-  killed: false,
-  signal: null,
-  cmd: 'C:\\Users\\pc\\.openmausbot\\tools\\agent-browser\\0.36.0-omb.1\\agent-browser.exe tab close t3 --json --no-webmcp',
-  stdout: '{"success":false,"data":null,"error":"Tab t3 not found; run `agent-browser tab` to list open tabs"}\n',
-  stderr: ''
-}
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow tool call: terminal 4m53s ok engine cursorAgent bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow tool call: terminal 5m32s ok engine cursorAgent bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9
-[perf] slow turn 2026-11-19T07:46:58Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 14m44s: handshake 16s, ttft 23s, model 2m21s, tool 12m23s [terminal 5x 12m02s; tool 19x 2m08s 5 failed 5 left open; files 1x 329ms]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-browser: Google Chrome 157 (installed)
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T08:28:22Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 5m24s: queue 67ms (dispatch), handshake 16s, ttft 25s, model 4m40s, tool 45s [tool 12x 2m37s; files 5x 3.5s; terminal 2x 2.3s]
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow tool call: terminal 2m06s ok engine cursorAgent bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T08:33:47Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 11m40s: handshake 18s, ttft 28s, model 6m54s, tool 4m46s [terminal 20x 3m29s; tool 30x 2m24s; files 2x 300ms]
-[perf] slow turn 2026-11-19T08:45:27Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 7m45s: handshake 14s, ttft 20s, model 6m19s, tool 1m26s [tool 24x 4m12s; files 2x 17s; terminal 4x 7.2s]
-[perf] slow turn 2026-11-19T08:53:12Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 10m57s: handshake 13s, ttft 22s, model 8m00s, tool 2m58s [tool 26x 4m14s; terminal 14x 1m25s 1 failed 1 left open]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T09:04:09Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 5m55s: handshake 20s, ttft 23s, model 5m19s, tool 36s [tool 17x 1m04s; terminal 8x 12s; files 3x 3.3s]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T09:11:04Z bot ? thread dfb06197-be9b-421f-b93e-c8a5f0f955f3 cursorAgent ok 6m16s: handshake 3.9s, ttft 16s, model 5m25s, tool 51s [tool 27x 51s]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[perf] slow turn 2026-11-19T09:37:44Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 5m08s: handshake 17s, ttft 22s, model 5m00s, tool 8.8s [tool 13x 5.0s; files 9x 4.4s; terminal 2x 2.8s]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T09:46:54Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 11m52s: handshake 12s, ttft 20s, model 10m02s, tool 1m50s [terminal 18x 1m40s; tool 29x 11s; files 4x 607ms]
-[perf] slow turn 2026-11-19T09:56:54Z bot 72a84e88-1771-40da-bd53-592e366afbb9 thread 95775150-0286-4b1f-b83a-ccb720039a95 deepseekAgent ok 5m10s: handshake 15s, ttft 22s, model 3m56s, tool 1m15s [terminal 30x 1m14s 2 failed; tool 1x 428ms; bots 1x 41ms]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T10:07:44Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 14m20s: handshake 20s, ttft 30s, model 12m33s, tool 1m47s [terminal 31x 1m25s; tool 73x 44s; files 12x 26s]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-19T10:22:04Z bot ? thread 7ef37ab9-569f-459c-9f0b-dbd98c4424d9 cursorAgent ok 8m26s: handshake 1m08s, ttft 1m14s, model 7m11s, tool 1m14s [files 22x 1m43s; terminal 12x 38s; tool 19x 4.3s]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[announcements] could not refresh the announcements (fetch failed); keeping the current copy
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (it did not answer in time); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[perf] slow turn 2026-11-20T01:40:16Z bot 72a84e88-1771-40da-bd53-592e366afbb9 thread 95775150-0286-4b1f-b83a-ccb720039a95 deepseekAgent ok 10m16s: queue 15s (dispatch), handshake 15s, ttft 19s, model 4m28s, tool 5m49s [terminal 48x 5m31s 9 failed; browser 4x 13s; computer 9x 4.2s; tool 4x 420ms 2 failed; files 3x 44ms]
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
-[model-manifest] could not refresh the model list (fetch failed); keeping the current one
 [announcements] could not refresh the announcements (fetch failed); keeping the current copy
 [model-manifest] could not refresh the model list (fetch failed); keeping the current one
+[announcements] could not refresh the announcements (fetch failed); keeping the current copy

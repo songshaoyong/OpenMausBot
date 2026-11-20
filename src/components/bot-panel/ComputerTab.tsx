@@ -12,6 +12,7 @@ import { useDesktopCapabilities } from "../DesktopCapabilities";
 import { LocalComputerAutoWarning } from "../LocalComputerAutoWarning";
 import { usePlaceViews } from "../PlaceChip";
 import { screenFramePreview } from "../ScreenFrame";
+import { Select } from "../Select";
 import type { BotPatch, useBotSettingsDerived } from "../bot-settings/useBotSettingsDerived";
 import type { SimplePageId } from "./page-registry";
 import { Card, NavRow, RadioRow } from "./rows";
@@ -81,8 +82,9 @@ function usePlaceChoices(bot: Bot) {
 }
 
 export function WherePage({ bot, derived }: { bot: Bot; derived: Derived }) {
-  const { dispatch } = useStore();
+  const { dispatch, state } = useStore();
   const { options, current, usingNow } = usePlaceChoices(bot);
+  const sharedDesktops = state.config?.localVmSharedDesktops ?? [];
   const [localAutoWarning, setLocalAutoWarning] = useState<{ botId: string; patch: BotPatch } | null>(null);
   const { patch, approvalMode } = derived;
   const choosePlace = (value: PlaceChoice) => {
@@ -111,6 +113,25 @@ export function WherePage({ bot, derived }: { bot: Bot; derived: Derived }) {
           ))}
         </div>
       </Card>
+      {current === "vm" && sharedDesktops.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <label htmlFor={`${bot.id}-simple-shared-desktop`} className="text-[13px] font-medium text-ink">{t("vm.shared.pick")}</label>
+            <Select
+              id={`${bot.id}-simple-shared-desktop`}
+              size="sm"
+              value={bot.localVmSharedDesktop ?? ""}
+              disabled={bot.busy}
+              onChange={(event) => patch({ localVmSharedDesktop: event.target.value || null })}
+            >
+              <option value="">{t("vm.shared.own")}</option>
+              {sharedDesktops.map((desktop) => <option key={desktop.id} value={desktop.id}>{desktop.name}</option>)}
+              {bot.localVmSharedDesktop && !sharedDesktops.some((desktop) => desktop.id === bot.localVmSharedDesktop)
+                ? <option value={bot.localVmSharedDesktop} disabled>{t("vm.shared.missingSelection")}</option> : null}
+            </Select>
+          </div>
+        </Card>
+      )}
       {usingNow && <p data-panel-using-now className="mx-1 text-[13px] text-ink-secondary">{t("computer.simple.usingNow", { place: usingNow })}</p>}
       <LocalComputerAutoWarning
         open={localAutoWarning !== null}

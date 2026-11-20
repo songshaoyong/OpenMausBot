@@ -10,7 +10,7 @@ import {
   type ContainerComputerStatus,
   type LocalVmTarget,
 } from "./container-computer.ts";
-import { discoverExistingPerBotLocalVms, discoverExistingPoolLocalVms, shouldArmLocalVmIdle, type LocalVmInventoryBot } from "./local-vm-inventory.ts";
+import { discoverExistingLocalVmTargets, discoverExistingPerBotLocalVms, discoverExistingPoolLocalVms, shouldArmLocalVmIdle, type LocalVmInventoryBot } from "./local-vm-inventory.ts";
 import { keepFirefoxProfileBeforeRemove, keepInstalledAppsBeforeRemove } from "./local-vm-profiles.ts";
 
 export type LocalVmUpdateNeed = "image" | "recreate";
@@ -231,6 +231,8 @@ export async function recoverLocalVms(input: {
   mode: "shared" | "per-bot" | "pool";
   seats: number;
   bots: LocalVmInventoryBot[];
+  /** Named shared desktop containers; each entry owns a real container. */
+  sharedDesktopTargets?: readonly LocalVmTarget[];
   seen: Set<string>;
   status(target: LocalVmTarget): Promise<ContainerComputerStatus | null>;
   note(target: LocalVmTarget, status: ContainerComputerStatus | null): void;
@@ -243,15 +245,25 @@ export async function recoverLocalVms(input: {
       if (shouldArmLocalVmIdle(statuses[index])) input.armIdle(target);
     });
   };
-  if (input.mode === "shared") return settle([SHARED_LOCAL_VM_TARGET]);
-  const workspaces = input.mode === "pool"
-    ? Array.from({ length: input.seats }, (_, seat) => poolLocalVmTarget(seat))
-    : input.bots.map((bot) => perBotLocalVmTarget(bot.id));
-  for (const target of workspaces) if (localVmWorkspaceExists(target)) input.seen.add(target.key);
+  if (input.mode === "shared") {
+    await settle([SHARED_LOCAL_VM_TARGET]);
+  } else {
+    const workspaces = input.mode === "pool"
+      ? Array.from({ length: input.seats }, (_, seat) => poolLocalVmTarget(seat))
+      : input.bots.map((bot) => perBotLocalVmTarget(bot.id));
+    for (const target of workspaces) if (localVmWorkspaceExists(target)) input.seen.add(target.key);
+    const runtime = await containerRuntimeStatus().catch(() => null);
+    if (runtime?.runtime && runtime.daemonUp) {
+      const existing = input.mode === "pool"
+        ? await discoverExistingPoolLocalVms(input.seats, runtime.runtime).catch(() => [])
+        : (await discoverExistingPerBotLocalVms(input.bots, runtime.runtime).catch(() => [])).map(({ target }) => target);
+      await settle(existing);
+    }
+  }
+  const sharedDesktopTargets = [...(input.sharedDesktopTargets ?? [])];
+  if (!sharedDesktopTargets.length) return;
+  for (const target of sharedDesktopTargets) if (localVmWorkspaceExists(target)) input.seen.add(target.key);
   const runtime = await containerRuntimeStatus().catch(() => null);
   if (!runtime?.runtime || !runtime.daemonUp) return;
-  const existing = input.mode === "pool"
-    ? await discoverExistingPoolLocalVms(input.seats, runtime.runtime).catch(() => [])
-    : (await discoverExistingPerBotLocalVms(input.bots, runtime.runtime).catch(() => [])).map(({ target }) => target);
-  await settle(existing);
+  await settle(await discoverExistingLocalVmTargets(sharedDesktopTargets, runtime.runtime).catch(() => []));
 }

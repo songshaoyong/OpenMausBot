@@ -282,7 +282,16 @@ export function createLiveStreamClient(botId: string, events: PreviewStreamEvent
         }
       }
       events.onFrame(bytes.buffer);
-      void post({ type: "ack", seq: data.seq }, viewerId).catch(() => undefined);
+      const sentTo = viewerId;
+      const seq = data.seq;
+      void postTo({ type: "ack", seq }, sentTo).catch((cause: unknown) => {
+        if (viewerId !== sentTo) return;
+        console.warn("browser-live: frame acknowledgement failed; retrying", { viewerId: sentTo, seq, status: (cause as { status?: unknown } | null)?.status });
+        void postTo({ type: "ack", seq }, sentTo).catch((retryCause: unknown) => {
+          if (viewerId !== sentTo) return;
+          console.warn("browser-live: frame acknowledgement retry failed", { viewerId: sentTo, seq, status: (retryCause as { status?: unknown } | null)?.status });
+        });
+      });
     });
     listen("tabs", (data) => { if (Array.isArray(data.tabs)) events.onMessage?.({ type: "tabs", tabs: data.tabs }); });
     listen("url", (data) => { if (typeof data.url === "string") events.onMessage?.({ type: "url", url: data.url }); });

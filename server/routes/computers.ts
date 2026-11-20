@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { cp, mkdir, rm } from "node:fs/promises";
 import { z, type ZodString } from "zod";
 import * as boat from "../boat.ts";
 import { boatHealth } from "../boat-health.ts";
@@ -8,11 +10,15 @@ import {
   containerComputerExists,
   containerComputerScreenshot,
   containerComputerStatus,
+  localVmWorkspaceExists,
+  perBotLocalVmTarget,
+  sharedDesktopLocalVmTarget,
   SHARED_LOCAL_VM_TARGET,
   setupCommands,
   type LocalVmTarget,
   type Runtime,
 } from "../container-computer.ts";
+import type { LocalVmInventoryEntry } from "../local-vm-inventory.ts";
 import { viewerTargetId } from "../../shared/desktop-viewer.ts";
 import { localVmViewerStatus } from "../desktop-viewer-targets.ts";
 import { localVmShare } from "../local-vm-share.ts";
@@ -40,7 +46,7 @@ async function keepSignInsBeforeRemove(target: LocalVmTarget): Promise<void> {
 }
 
 export interface ComputerRouteDeps {
-  store: Pick<Store, "bot" | "bots" | "sections">;
+  store: Pick<Store, "bot" | "bots" | "sections" | "patchBot">;
   cfg: AppConfig;
   sessions: Pick<SessionRegistry, "isLive">;
   teamComputers: Pick<TeamComputers, "get" | "create" | "assign" | "setProblem" | "list">;
@@ -64,6 +70,8 @@ export interface ComputerRouteDeps {
   localVmPayload(target: LocalVmTarget, auth: RequestAuth): Promise<unknown>;
   localVmInventoryPayload(): Promise<unknown>;
   existingPerBotLocalVmCount(runtime: Runtime): Promise<number>;
+  saveLocalVmSharedDesktops(desktops: Array<{ id: string; name: string }>): void;
+  configChanged(): void;
   teamComputersPayload(): Promise<unknown>;
   teamComputerInUse(computer: TeamComputerRecord): boolean;
   managedBoatOwners(): boat.ManagedBoatOwner[];
@@ -93,6 +101,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
     computerProviderConfigTransitions, localVmActiveThreads, localVmLifecycleBusy, localVmSeen, localVmImageBusy,
     localVmProvisionBusy, localVmModeChangeBusy, localVmOwnerBusy, localVmIdleMs, localVmLeaseFor, localVmIdleFor,
     localVmTargetForBot, localVmTargetForStatus, localVmPayload, localVmInventoryPayload, existingPerBotLocalVmCount,
+    saveLocalVmSharedDesktops, configChanged,
     teamComputersPayload, teamComputerInUse, managedBoatOwners, providerTransitionMessage, botHasActiveTurn,
     localVmLeaseKey, botComputerControlSnapshot, computerPreviewBot, computerPreviewSurface,
     claimTeamComputerLifecycle, claimBotComputerLifecycle, claimBoatInventoryRequest, claimManagedBoatMutation,
@@ -102,6 +111,56 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
   // A map owner is a bot id or a team computer's key; a bot's hold may sit on the shared desktop's key.
   const frames = createComputerFramesRoutes({ ...deps, computerControl: { snapshot: botComputerControlSnapshot } });
   const recovery = createCloudComputerRecoveryRoutes({ ...deps, botComputerControlKey: deps.cloudComputerOwner });
+  const sharedDesktopRow = async (desktop: { id: string; name: string }) => {
+    const target = sharedDesktopLocalVmTarget(desktop.id);
+    const status = await containerComputerStatus(undefined, undefined, target).catch(() => null);
+    return {
+      ...desktop,
+      container: status?.container ?? null,
+      ready: status?.ready ?? false,
+      runtime: status?.runtime ?? null,
+      users: store.bots.filter((bot) => bot.localVmSharedDesktop === desktop.id).map((bot) => ({ id: bot.id, name: bot.name })),
+    };
+  };
+  const sharedDesktopsPayload = async () => {
+    const desktops = cfg.localVmSharedDesktops ?? [];
+    return { desktops: await Promise.all(desktops.map(sharedDesktopRow)), maxInstances: localVmMaxInstances(cfg) };
+  };
+  const saveSharedDesktops = (next: Array<{ id: string; name: string }>) => {
+    saveLocalVmSharedDesktops(next);
+    configChanged();
+  };
+  const desktopsPayload = async () => {
+    const [shared, independent] = await Promise.all([sharedDesktopsPayload(), localVmInventoryPayload()]);
+    const inventory = independent as {
+      instances: LocalVmInventoryEntry[];
+      maxInstances: number;
+      available: boolean;
+      problem: string | null;
+    };
+    return {
+      desktops: [
+        ...shared.desktops.map((desktop) => ({ ...desktop, kind: "shared" as const, canMigrate: false })),
+        ...inventory.instances.map((instance) => ({
+          kind: "bot" as const,
+          id: instance.botId,
+          botId: instance.botId,
+          name: instance.name,
+          container: instance.container,
+          ready: instance.ready,
+          managed: instance.managed,
+          problem: instance.problem,
+          inUse: instance.inUse,
+          destination: instance.destination,
+          users: [],
+          canMigrate: instance.managed && !instance.inUse,
+        })),
+      ],
+      maxInstances: shared.maxInstances,
+      available: inventory.available,
+      problem: inventory.problem,
+    };
+  };
   return async (context) => {
     if (await usage(context) !== PASS) return;
     if (await frames(context) !== PASS) return;
@@ -296,6 +355,156 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
     if (method === "GET" && path === "/api/local-computer/instances") {
       res.setHeader("cache-control", "private, no-store");
       return json(res, 200, await localVmInventoryPayload());
+    }
+    if (method === "GET" && path === "/api/local-computer/shared-desktops") {
+      res.setHeader("cache-control", "private, no-store");
+      return json(res, 200, await sharedDesktopsPayload());
+    }
+    if (method === "GET" && path === "/api/local-computer/desktops") {
+      res.setHeader("cache-control", "private, no-store");
+      return json(res, 200, await desktopsPayload());
+    }
+    if (method === "POST" && path === "/api/local-computer/desktops/migrate") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      const botId = typeof body.botId === "string" ? body.botId : "";
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!botId || !name || name.length > 40) return json(res, 400, { error: "botId and a 1–40 character name are required" });
+      const bot = store.bot(botId);
+      if (!bot) return json(res, 404, { error: "No such bot" });
+      if ((cfg.localVmSharedDesktops ?? []).length >= localVmMaxInstances(cfg)) {
+        return json(res, 409, { error: "The private desktop limit is reached. Raise it in Settings before migrating another." });
+      }
+      if (localVmImageBusy.get() || localVmProvisionBusy.get() || localVmModeChangeBusy.get()) {
+        return json(res, 409, { error: "another private desktop setup action is still running" });
+      }
+      const sourceTarget = perBotLocalVmTarget(botId);
+      if (localVmLifecycleBusy.has(sourceTarget.key)) {
+        return json(res, 409, { error: "another private desktop setup action is still running" });
+      }
+      if (botHasActiveTurn(botId) || localVmActiveThreads.has(sourceTarget.key) || localVmLeaseFor(sourceTarget).current(localVmOwnerBusy)) {
+        return json(res, 409, { error: "This desktop is in use. Stop its bot's turn first." });
+      }
+      const sourceStatus = await containerComputerStatus(undefined, undefined, sourceTarget).catch(() => null);
+      if ((!sourceStatus || sourceStatus.container === "missing") && !localVmWorkspaceExists(sourceTarget)) {
+        return json(res, 404, { error: "This bot has no private desktop to migrate" });
+      }
+      const desktop = { id: `shared-desktop-${randomUUID().replaceAll("-", "")}`, name };
+      saveSharedDesktops([...(cfg.localVmSharedDesktops ?? []), desktop]);
+      const target = sharedDesktopLocalVmTarget(desktop.id);
+      let sharedStarted = false;
+      localVmLifecycleBusy.add(sourceTarget.key);
+      localVmLifecycleBusy.add(target.key);
+      localVmProvisionBusy.set(true);
+      try {
+        if (sourceStatus && sourceStatus.container !== "missing") {
+          await containerComputerAction("stop", undefined, undefined, sourceTarget, localVmResources(cfg), localVmExposure(cfg));
+        }
+        if (localVmWorkspaceExists(sourceTarget)) {
+          await mkdir(target.workspaceDir, { recursive: true });
+          await cp(sourceTarget.workspaceDir, target.workspaceDir, { recursive: true });
+        }
+        await containerComputerAction("run", undefined, undefined, target, localVmResources(cfg), localVmExposure(cfg));
+        sharedStarted = true;
+        localVmSeen.add(target.key);
+        localVmIdleFor(target).touch();
+        store.patchBot(botId, { localVmSharedDesktop: desktop.id });
+        return json(res, 201, await desktopsPayload());
+      } catch (error) {
+        if (!sharedStarted) {
+          saveSharedDesktops((cfg.localVmSharedDesktops ?? []).filter((candidate) => candidate.id !== desktop.id));
+          localVmIdleFor(target).cancel();
+          await rm(target.workspaceDir, { recursive: true, force: true }).catch(() => {});
+        }
+        return json(res, 502, { error: error instanceof Error ? error.message : "The desktop could not be migrated." });
+      } finally {
+        localVmProvisionBusy.set(false);
+        localVmLifecycleBusy.delete(sourceTarget.key);
+        localVmLifecycleBusy.delete(target.key);
+      }
+    }
+    if (method === "POST" && path === "/api/local-computer/shared-desktops") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name || name.length > 40) return json(res, 400, { error: "name must be 1–40 characters" });
+      if ((cfg.localVmSharedDesktops ?? []).length >= localVmMaxInstances(cfg)) {
+        return json(res, 409, { error: "The private desktop limit is reached. Raise it in Settings before creating another." });
+      }
+      if (localVmImageBusy.get() || localVmProvisionBusy.get() || localVmModeChangeBusy.get()) {
+        return json(res, 409, { error: "another private desktop setup action is still running" });
+      }
+      const desktop = { id: `shared-desktop-${randomUUID().replaceAll("-", "")}`, name };
+      saveSharedDesktops([...(cfg.localVmSharedDesktops ?? []), desktop]);
+      const target = sharedDesktopLocalVmTarget(desktop.id);
+      localVmLifecycleBusy.add(target.key);
+      localVmProvisionBusy.set(true);
+      let problem: string | null = null;
+      try {
+        await containerComputerAction("run", undefined, undefined, target, localVmResources(cfg), localVmExposure(cfg));
+        localVmSeen.add(target.key);
+        localVmIdleFor(target).touch();
+      } catch (error) {
+        problem = error instanceof Error ? error.message : "The desktop could not be started.";
+      } finally {
+        localVmProvisionBusy.set(false);
+        localVmLifecycleBusy.delete(target.key);
+      }
+      return json(res, 201, { ...await sharedDesktopsPayload(), ...(problem ? { error: problem } : {}) });
+    }
+    m = path.match(/^\/api\/local-computer\/shared-desktops\/([\w-]+)$/);
+    if (m && method === "PATCH") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const desktop = (cfg.localVmSharedDesktops ?? []).find((candidate) => candidate.id === m![1]);
+      if (!desktop) return json(res, 404, { error: "No such shared desktop" });
+      const body = await readBody(req);
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name || name.length > 40) return json(res, 400, { error: "name must be 1–40 characters" });
+      saveSharedDesktops((cfg.localVmSharedDesktops ?? []).map((candidate) => candidate.id === desktop.id ? { ...candidate, name } : candidate));
+      return json(res, 200, await sharedDesktopsPayload());
+    }
+    m = path.match(/^\/api\/local-computer\/shared-desktops\/([\w-]+)\/(start|stop|remove)$/);
+    if (m && method === "POST") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const desktop = (cfg.localVmSharedDesktops ?? []).find((candidate) => candidate.id === m![1]);
+      if (!desktop) return json(res, 404, { error: "No such shared desktop" });
+      const target = sharedDesktopLocalVmTarget(desktop.id);
+      const action = m[2] as "start" | "stop" | "remove";
+      const users = store.bots.filter((bot) => bot.localVmSharedDesktop === desktop.id);
+      if (localVmLifecycleBusy.has(target.key)) return json(res, 409, { error: "another private desktop setup action is still running" });
+      if ((action === "stop" || action === "remove") && (localVmActiveThreads.has(target.key) || localVmLeaseFor(target).current(localVmOwnerBusy))) {
+        return json(res, 409, { error: "This desktop is in use. Stop its bot's turn first." });
+      }
+      if (action === "remove" && users.length) {
+        return json(res, 409, { error: `${users.map((bot) => bot.name).join(", ")} still use this desktop. Move them first.` });
+      }
+      localVmLifecycleBusy.add(target.key);
+      try {
+        if (action === "remove") await keepSignInsBeforeRemove(target);
+        await containerComputerAction(action === "start" ? "run" : action, undefined, undefined, target, localVmResources(cfg), localVmExposure(cfg));
+        if (action === "remove") {
+          saveSharedDesktops((cfg.localVmSharedDesktops ?? []).filter((candidate) => candidate.id !== desktop.id));
+          localVmIdleFor(target).cancel();
+        } else if (action === "stop") {
+          localVmIdleFor(target).cancel();
+        } else {
+          localVmSeen.add(target.key);
+          localVmIdleFor(target).touch();
+        }
+        return json(res, 200, await sharedDesktopsPayload());
+      } catch (error) {
+        return json(res, 502, { error: error instanceof Error ? error.message : "The desktop action failed." });
+      } finally {
+        localVmLifecycleBusy.delete(target.key);
+      }
     }
     m = path.match(/^\/api\/local-computer\/(pull|run|start|stop|remove)$/);
     if (m && method === "POST") {

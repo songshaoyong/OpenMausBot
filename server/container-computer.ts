@@ -137,6 +137,19 @@ function rememberLocalVmViewer(target: LocalVmTarget, status: ContainerComputerS
   } else if (forget) runningLocalVms.delete(target.key);
 }
 
+/** A named shared container several bots may select, disjoint from the singleton, per-bot digests and pool seats. */
+export function sharedDesktopLocalVmTarget(desktopId: string): LocalVmTarget {
+  const digest = createHash("sha256").update(desktopId).digest("hex");
+  const short = digest.slice(0, 16);
+  return {
+    key: `shared-desktop:${digest}`,
+    containerName: `${CONTAINER}-s${short}`,
+    workspaceDir: join(DATA_DIR, "vm-homes", `shared-${short}`),
+    viewerPort: null,
+    label: digest,
+  };
+}
+
 /** Seat identities stay disjoint from the shared singleton and per-bot digests, so the three modes never meet. */
 export function poolLocalVmTarget(seat: number): LocalVmTarget {
   return {

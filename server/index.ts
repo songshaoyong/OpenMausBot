@@ -140,6 +140,7 @@ import {
   localVmWakeAction,
   perBotLocalVmTarget,
   poolLocalVmTarget,
+  sharedDesktopLocalVmTarget,
   SHARED_LOCAL_VM_TARGET,
   setupCommands,
   VM_WORKSPACE_GUEST,
@@ -426,7 +427,7 @@ import { gatedLocalComputer } from "./local-computer.ts";
 import { desktopComputer, thisComputerNotReadyError } from "./desktop-computer.ts";
 import { askToUseYourComputer, cancelYourComputerAsks, claimWithYourComputerConsent, dismissStaleYourComputerCards, yourComputerCallFrom, yourComputerWaiting, type YourComputerBus } from "./your-computer-consent.ts";
 import { createComputerAsksHost } from "./host/computer-asks-host.ts";
-import { discoverExistingPerBotLocalVms, localVmInventoryEntry } from "./local-vm-inventory.ts";
+import { discoverExistingLocalVmTargets, discoverExistingPerBotLocalVms, localVmInventoryEntry } from "./local-vm-inventory.ts";
 import { createLocalVmUpdater, LOCAL_VM_UPDATING_PROBLEM, recoverLocalVms, VPS_OUTDATED_HINT, vpsDesktopOutdated, withoutHostWhileUpdating } from "./desktop-updates.ts";
 import { keepInstalledAppsBeforeRemove } from "./local-vm-profiles.ts";
 import { localVmStopReason, recordLocalVmIdleStop } from "./local-vm-stop-reason.ts";
@@ -2959,7 +2960,7 @@ function previewSystemPrompt(bot: BotRecord) {
   const computerPromptKind = resolveComputerPromptKind({
     kind: previewComputer === "vm" ? "vm" : previewComputer === "cloud"
       ? bot.cloudBackend === "vps" ? "vps" : "box" : previewComputer === "local" ? "local" : null,
-    vmPrivate: localVmMode(cfg) === "per-bot",
+    vmPrivate: localVmMode(cfg) === "per-bot" && !bot.localVmSharedDesktop,
   });
   const peers = reachablePeers(store.bots, bot);
   const coordination = chiefLevel(bot)
@@ -6215,13 +6216,24 @@ function claimManagedVpsMutation(containerName: string): () => void {
   return claimBotComputerLifecycle(owner.id);
 }
 
+function localVmSharedDesktopTargetForBot(botId: string): LocalVmTarget | null {
+  const desktopId = store.bot(botId)?.localVmSharedDesktop;
+  if (!desktopId) return null;
+  return (cfg.localVmSharedDesktops ?? []).some((desktop) => desktop.id === desktopId)
+    ? sharedDesktopLocalVmTarget(desktopId)
+    : null;
+}
+
 function localVmTargetForBot(botId: string): LocalVmTarget {
-  return localVmMode(cfg) === "per-bot" ? perBotLocalVmTarget(botId) : SHARED_LOCAL_VM_TARGET;
+  return localVmSharedDesktopTargetForBot(botId)
+    ?? (localVmMode(cfg) === "per-bot" ? perBotLocalVmTarget(botId) : SHARED_LOCAL_VM_TARGET);
 }
 
 /** The desktop this bot is using. A pool seat counts only while this bot holds it. */
 function localVmKeyForBot(botId: string): string | null {
   if (!botId) return null;
+  const shared = localVmSharedDesktopTargetForBot(botId);
+  if (shared) return shared.key;
   const mode = localVmMode(cfg);
   if (mode === "pool") {
     for (let seat = 0; seat < localVmMaxInstances(cfg); seat += 1) {
@@ -6249,13 +6261,13 @@ function localVmPoolSeatHolder(seat: number): LocalVmSeatHolder | null {
 }
 
 function localVmTargetForThread(botId: string, threadId: string): LocalVmTarget {
-  if (localVmMode(cfg) !== "pool") return localVmTargetForBot(botId);
+  if (localVmSharedDesktopTargetForBot(botId) || localVmMode(cfg) !== "pool") return localVmTargetForBot(botId);
   return poolLocalVmTarget(localVmSeatPool.assign(threadId, localVmPoolSeatHolder));
 }
 
 /** Records no affinity: a status probe must not steer a later turn's seat. */
 function localVmTargetForStatus(botId: string, threadId?: string): LocalVmTarget {
-  if (localVmMode(cfg) !== "pool") return localVmTargetForBot(botId);
+  if (localVmSharedDesktopTargetForBot(botId) || localVmMode(cfg) !== "pool") return localVmTargetForBot(botId);
   // Prefer the live target: an in-flight turn keeps its seat after its affinity TTL decays.
   const activeTarget = threadId ? localVmThreadTargets.get(threadId) : undefined;
   if (activeTarget) return activeTarget;
@@ -6305,7 +6317,8 @@ function releaseLocalVmThread(threadId: string): void {
 }
 
 void recoverLocalVms({
-  mode: localVmMode(cfg), seats: localVmMaxInstances(cfg), bots: store.bots, seen: localVmSeen,
+  mode: localVmMode(cfg), seats: localVmMaxInstances(cfg), bots: store.bots,
+  sharedDesktopTargets: localVmSharedDesktopTargets(), seen: localVmSeen,
   status: (target) => containerComputerStatus(undefined, undefined, target).catch(() => null),
   note: noteLocalVmSeen, armIdle: (target) => localVmIdleFor(target).touch(),
 }).then(() => localVmUpdates.sweep()).catch(() => {});
@@ -8385,7 +8398,7 @@ async function beginTurn(
       }
       const computerPromptKind = resolveComputerPromptKind({
         kind: computerKind,
-        vmPrivate: localVmMode(cfg) === "per-bot",
+        vmPrivate: localVmMode(cfg) === "per-bot" && !bot.localVmSharedDesktop,
       });
       const coordinationNode = opts?.coordination ? coordinator.node(opts.coordination.id) : undefined;
       if (opts?.coordination && (!coordinationNode || coordinationNode.status !== "running" || roomHandoffProblem(coordinationNode,
@@ -10168,7 +10181,7 @@ async function runClaimedGroupMemberTurn(
   recordTurnPlace(bot.id, threadId, (roomTeamComputer ? "cloud" : roomVmTarget ? "vm" : surfaceOfComputerKind(roomComputerKind)) ?? (integrations.browser ? "browser" : null));
   const roomComputerPromptKind = resolveComputerPromptKind({
     kind: roomTeamComputer || roomComputerKind === "box" ? "box" : roomVmTarget ? "vm" : roomComputerKind,
-    vmPrivate: localVmMode(cfg) === "per-bot",
+    vmPrivate: localVmMode(cfg) === "per-bot" && !roomVmTarget?.key.startsWith("shared-desktop:"),
   });
   {
     const crossing = claimRecallCrossings(threadId, recentLines.filter((line) => line.private).map((line) => line.threadId));
@@ -11698,6 +11711,10 @@ async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurre
       const count = await existingPerBotLocalVmCount(status.runtime);
       if (!isCurrent() || count >= localVmMaxInstances(cfg)) return status;
     }
+    if (action === "run" && target.key.startsWith("shared-desktop:")) {
+      const count = await existingSharedDesktopCount(status.runtime);
+      if (!isCurrent() || count >= localVmMaxInstances(cfg)) return status;
+    }
 
     broadcast({ kind: "computer", botId, state: "provisioning" });
     try {
@@ -11725,6 +11742,20 @@ async function readyLocalVmForTurn(botId: string, target: LocalVmTarget, isCurre
 
 async function existingPerBotLocalVmCount(runtime: Runtime) {
   return (await discoverExistingPerBotLocalVms(store.bots, runtime)).length;
+}
+
+function localVmSharedDesktopTargets(): LocalVmTarget[] {
+  return (cfg.localVmSharedDesktops ?? []).map((desktop) => sharedDesktopLocalVmTarget(desktop.id));
+}
+
+async function existingSharedDesktopCount(runtime: Runtime) {
+  const targets = localVmSharedDesktopTargets();
+  return targets.length ? (await discoverExistingLocalVmTargets(targets, runtime)).length : 0;
+}
+
+function saveLocalVmSharedDesktops(desktops: Array<{ id: string; name: string }>): void {
+  saveConfig({ localVmSharedDesktops: desktops });
+  cfg.localVmSharedDesktops = desktops;
 }
 
 async function perBotLocalVmCountForModeChange(): Promise<number | null> {
@@ -11822,6 +11853,7 @@ function configStatus() {
     browserEngine: browserEngineSummary(),
     // partitionId is read-only routing metadata: config PATCH rejects callers that try to choose it.
     browserProfiles: cfg.browserProfiles ?? [],
+    localVmSharedDesktops: cfg.localVmSharedDesktops ?? [],
     signIn: { admins: cfg.signIn?.admins ?? [], members: cfg.signIn?.members ?? [] },
     membership: workspaceMembership(), workspaceBanner: workspaceBannerSummary(),
   };
@@ -11841,6 +11873,7 @@ function configForAccess(status: ReturnType<typeof configStatus>, admin: boolean
     opencodeGo: { configured: status.opencodeGo.configured, providerKeys: [] },
     ...(CLOUD_TEAM ? { onboarding } : {}), profile: CLOUD_TEAM ? profile : { name: profile.name, email: "", ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}) },
     browserProfiles: status.browserProfiles.map((profile) => Object.fromEntries(Object.entries(profile).filter(([key]) => key !== "partitionId"))),
+    localVmSharedDesktops: status.localVmSharedDesktops,
   };
 }
 
@@ -12428,7 +12461,9 @@ ROUTES.push(createComputerRoutes({
   localVmProvisionBusy: { get: () => localVmProvisionBusy, set: (busy) => { localVmProvisionBusy = busy; } },
   localVmModeChangeBusy: { get: () => localVmModeChangeBusy },
   localVmOwnerBusy, localVmIdleMs, localVmLeaseFor, localVmIdleFor, localVmTargetForBot, localVmTargetForStatus,
-  localVmPayload, localVmInventoryPayload, existingPerBotLocalVmCount, teamComputersPayload, teamComputerInUse,
+  localVmPayload, localVmInventoryPayload, existingPerBotLocalVmCount,
+  saveLocalVmSharedDesktops, configChanged: () => broadcast({ kind: "config", ...configStatus() }),
+  teamComputersPayload, teamComputerInUse,
   managedBoatOwners, providerTransitionMessage, botHasActiveTurn, localVmLeaseKey: sharedVm.leaseKey, botComputerControlSnapshot: sharedVm.snapshot,
   computerPreviewBot, computerPreviewSurface, claimTeamComputerLifecycle, claimBotComputerLifecycle,
   claimBoatInventoryRequest, claimManagedBoatMutation, claimManagedVpsMutation, cloudComputerUsed: owner => cloudComputerPower.used(owner), boatRecovery, cloudComputerOwner: botComputerControlKey,

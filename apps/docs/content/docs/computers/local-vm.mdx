@@ -42,6 +42,45 @@ The equivalent source configuration is:
 
 Local VMs always run on the same physical host as the OpenMausBot desktop process. `maxInstances: 2` does not pool one VM from a Mac and another from a Windows PC. To use Windows capacity today, run MausBot on Windows with its supported Podman lane and create both per-bot desktops there. The BYO-VPS backend is limited to an x86_64 Linux Docker host; do not point it at Windows as a substitute remote Local VM. Cross-host Mac and Windows pooling is tracked in [issue #508](https://github.com/milind-soni/OpenMausBot/issues/508).
 
+## One desktop inventory
+
+Private desktops are real containers, and Settings shows them in one list. A row is either **Shared** or **Independent**:
+
+- **Shared**: one container several bots may select.
+- **Independent**: one container for one bot; the list also keeps old independent desktops so they can be cleaned up.
+
+Create a shared desktop from the list. Give each bot **Private desktop** as its computer, then choose the shared desktop in that bot's Screen panel or its **Where it works** page. Only one pane can hold interactive control at a time.
+
+### Migrate an independent desktop to shared
+
+An independent desktop can become shared. This is a migration, not an in-place type change, because the container identity comes from its target key.
+
+1. Stop the bot's turn.
+2. Choose **Migrate to shared** on that independent row.
+3. MausBot stops the old container, creates a new shared container, copies the durable workspace, starts it, and points the bot at the shared desktop.
+4. The old independent desktop stays as **Independent** and can be deleted after you confirm the shared one works.
+
+The migration keeps durable files and browser sign-ins. It does not keep software installed inside the old desktop outside its durable workspace. During migration both desktops may count toward `maxInstances`.
+
+The equivalent source configuration is:
+
+```json
+{
+  "localVmSharedDesktops": [
+    { "id": "shared-desktop-project-a", "name": "Project A" }
+  ],
+  "localVm": { "mode": "shared", "maxInstances": 2 }
+}
+```
+
+Each bot stores the selected container id:
+
+```json
+{ "localVmSharedDesktop": "shared-desktop-project-a" }
+```
+
+Shared and independent desktops count toward `maxInstances`, separately.
+
 ## Memory and CPU
 
 Each desktop gets 4 GiB of memory, with no swap beyond it, and 2 CPUs. To change that, set `memoryGb` and `cpus` in `config.json`. Both are whole numbers: `memoryGb` from 2 to 128, and `cpus` from 1 to 64 but no more than your container runtime has (on Docker Desktop, its VM's CPU setting). A value outside those rules makes MausBot ignore the whole file, so check the server log after editing.

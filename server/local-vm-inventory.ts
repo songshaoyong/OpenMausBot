@@ -57,6 +57,20 @@ export async function discoverExistingPerBotLocalVms(
   return candidates.filter((_, index) => existing[index]);
 }
 
+/** Existing containers among an explicit target list, deduplicated by key. */
+export async function discoverExistingLocalVmTargets(
+  targets: readonly LocalVmTarget[],
+  runtime: Runtime,
+  exists: (
+    runtime: Runtime,
+    target: LocalVmTarget,
+  ) => Promise<boolean> = containerComputerExists,
+): Promise<LocalVmTarget[]> {
+  const unique = [...new Map(targets.map((target) => [target.key, target])).values()];
+  const existing = await Promise.all(unique.map((target) => exists(runtime, target)));
+  return unique.filter((_, index) => existing[index]);
+}
+
 export async function discoverExistingPoolLocalVms(
   seatCount: number,
   runtime: Runtime,

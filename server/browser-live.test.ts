@@ -1164,25 +1164,20 @@ describe("opening a view while the bot holds the browser", () => {
     expect(execute.mock.calls[0]?.[2]).toMatchObject({ timeout: 10_000, killSignal: "SIGKILL" });
   });
 
-  it("resets an engine that stops answering while nothing works in it, says so, and reconnects to a fresh session (#3728)", async () => {
+  it("retries an idle status timeout without resetting the browser", async () => {
+    vi.useFakeTimers();
     vi.mocked(runtime.working).mockReturnValue(false);
-    execute.mockRejectedValueOnce(busy());
+    execute.mockRejectedValueOnce(busy()).mockResolvedValue(output(ready));
     const { res, opening } = start();
+    await vi.advanceTimersByTimeAsync(1_000);
     await opening;
-    expect(res.events("waiting")).toHaveLength(0);
-    expect(res.events("error")).toEqual([{ retryable: true, message: "The browser stopped responding, so it is being restarted. The live view reconnects by itself.", errorKey: "serverError.browser.restartingUnresponsive" }]);
-    expect(nativeClose).toHaveBeenCalledTimes(1);
-    expect(nativeClose).toHaveBeenCalledWith("/engine", expect.objectContaining({ AGENT_BROWSER_SESSION: "profile-a" }));
-    // The next view waits for that reset, then meets the fresh session.
-    const again = start();
-    await again.opening;
-    expect(again.res.events("ready")).toHaveLength(1);
-    expect(nativeClose).toHaveBeenCalledTimes(1);
+    expect(types(res).slice(0, 2)).toEqual(["waiting", "ready"]);
+    expect(nativeClose).not.toHaveBeenCalled();
   });
 
   it("carries the restart error code and original English over an isolated HTTP event stream", async () => {
     vi.mocked(runtime.working).mockReturnValue(false);
-    execute.mockRejectedValueOnce(busy());
+    execute.mockRejectedValue(busy());
     const server = createServer((_req, res) => {
       void live.open({ botId: "bot-a", session: "profile-a", owner: "admin-a", isCurrent: () => true, res,
         spec: { command: "/engine", env: { AGENT_BROWSER_SESSION: "profile-a" } } })
@@ -1203,11 +1198,13 @@ describe("opening a view while the bot holds the browser", () => {
         request.on("error", reject);
         request.setTimeout(5_000, () => request.destroy(new Error("The isolated SSE fixture timed out")));
       });
-      expect(received).toEqual({ status: 200, contentType: "text/event-stream", body: `event: error\ndata: ${JSON.stringify({
+      expect(received.status).toBe(200);
+      expect(received.contentType).toBe("text/event-stream");
+      expect(received.body).toContain(`event: error\ndata: ${JSON.stringify({
         retryable: true,
         message: "The browser stopped responding, so it is being restarted. The live view reconnects by itself.",
         errorKey: "serverError.browser.restartingUnresponsive",
-      })}\n\n` });
+      })}\n\n`);
       expect(nativeClose).toHaveBeenCalledOnce();
     } finally {
       server.closeAllConnections();

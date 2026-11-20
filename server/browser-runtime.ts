@@ -685,6 +685,7 @@ export class BrowserRuntime {
     if (gate.closing || gate.uncertain) return;
     gate.uncertain = true;
     gate.lostCall = call;
+    console.warn(`browser-diag: interrupted source=agent-call agents=${gate.agents} dispatched=${gate.dispatched}`);
   }
 
   /** agent-browser runs one command per session even across connections (0.37.0), so a read that answers proves the lost call
@@ -702,6 +703,7 @@ export class BrowserRuntime {
     const gate = this.gate(session);
     gate.agents++;
     gate.probes++;
+    const started = performance.now();
     try {
       const { client } = this.connect(session, spec);
       await client.ready;
@@ -709,8 +711,10 @@ export class BrowserRuntime {
       if (gate.closing || !gate.uncertain || gate.lostCall === null) return null;
       gate.uncertain = false;
       gate.lostCall = null;
+      console.info(`browser-diag: recovery outcome=ok durationMs=${Math.round(performance.now() - started)}`);
       return firstText(result).trim().slice(0, 500);
     } catch {
+      console.warn(`browser-diag: recovery outcome=failed durationMs=${Math.round(performance.now() - started)}`);
       return null;
     } finally {
       gate.agents--;
@@ -774,6 +778,7 @@ export class BrowserRuntime {
   abandonHumanInput(session: string, owner: string): void {
     const gate = this.gates.get(session);
     if (!owner || !gate || gate.owner !== owner) return;
+    console.warn(`browser-diag: interrupted source=abandoned-input humans=${gate.humans} agents=${gate.agents}`);
     gate.uncertain = true;
     gate.lostCall = null;
     gate.ready = false;
@@ -797,6 +802,7 @@ export class BrowserRuntime {
     catch (error) {
       // A failed accepted command may still be running in the daemon; hand-back must not race its completion.
       if (!isSettledBrowserFailure(error)) {
+        console.warn(`browser-diag: interrupted source=human-action humans=${gate.humans} agents=${gate.agents}`);
         gate.uncertain = true;
         gate.lostCall = null;
         gate.ready = false;

@@ -391,6 +391,19 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
         patch.browserProfile = checked.profile;
       }
+      if (body.localVmSharedDesktop !== undefined) {
+        const requested = body.localVmSharedDesktop;
+        if (requested === null || requested === "") {
+          patch.localVmSharedDesktop = undefined;
+        } else if (typeof requested !== "string" || !cfg.localVmSharedDesktops?.some((desktop) => desktop.id === requested)) {
+          return json(res, 400, { error: "No such shared private desktop" });
+        } else {
+          patch.localVmSharedDesktop = requested;
+        }
+        const changing = existingBot?.localVmSharedDesktop !== patch.localVmSharedDesktop;
+        const running = existingBot?.busy || [...(deps.turnBots?.values() ?? [])].some((bot) => bot.id === m[1]);
+        if (changing && running) return json(res, 409, { error: "Stop the bot before changing its private desktop." });
+      }
       if (body.cloudBackend !== undefined && !["box", "vps"].includes(String(body.cloudBackend))) {
         return json(res, 400, { error: "cloudBackend must be box or vps" });
       }

@@ -304,6 +304,8 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
   modelSelection: ModelSelection;
   /** where the bot works ("Works on"). Unset = auto. */
   computer?: Surface | "off";
+  /** Id of a named shared private desktop; absent = the workspace default. */
+  localVmSharedDesktop?: string;
   /** Which cloud computer backs computer: "cloud"; absent means Boat. */
   cloudBackend?: CloudBackend;
   /** Auto mode may prepare/start this bot's managed VPS container. */

@@ -419,7 +419,10 @@ export function StreamSurface(props: {
         onConnectedChange: (next) => {
           setConnected(next);
           propsRef.current.onConnectedChange?.(next);
-          if (next) return;
+          if (next) {
+            setNotices((current) => current.filter((notice) => notice.kind !== "error" || notice.message !== "The browser stream disconnected."));
+            return;
+          }
           setFileChooser(null);
           setSelect(null);
           setAuthPrompt(null);

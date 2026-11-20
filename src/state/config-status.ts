@@ -83,6 +83,8 @@ export interface ConfigStatus {
   /** Prompt-cache keep-warm for idle Claude threads. Absent from older servers. */
   cacheKeepWarm?: { enabled: boolean; windowMinutes: number };
   localVm: { mode: "shared" | "per-bot" | "pool"; maxInstances: number; idleTimeoutMinutes?: number; preserveInstalledApps?: boolean };
+  /** Named shared private desktops; each entry owns a real container. */
+  localVmSharedDesktops?: Array<{ id: string; name: string }>;
   /** `providerKeys`: names of the keys saved for OpenCode's other
    * providers, never the keys. */
   opencodeGo?: SavedKey & { providerKeys?: string[] };

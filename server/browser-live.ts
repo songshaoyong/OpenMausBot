@@ -60,7 +60,8 @@ export class BrowserBusyError extends BrowserLiveError {
   }
 }
 
-/** The engine left a status read unanswered with no bot or person working in it: it hung, and its session is being reset. */
+class BrowserStatusTimeoutError extends BrowserBusyError {}
+
 class BrowserUnresponsiveError extends BrowserLiveError {
   constructor() { super("The browser stopped responding, so it is being restarted. The live view reconnects by itself.", 503); this.name = "BrowserUnresponsiveError"; Object.assign(this, userErrorFields(userError("serverError.browser.restartingUnresponsive"))); }
 }
@@ -335,7 +336,7 @@ export class BrowserLive {
   private send(viewer: Viewer, message: ObjectValue): void {
     if (!this.current(viewer)) { this.close(viewer, true, true); return; }
     if (!viewer.res.headersSent) return;
-    if (viewer.waiting && message.type !== "waiting" && message.type !== "error") return;
+    if (viewer.waiting && message.type !== "waiting" && message.type !== "error" && message.type !== "heartbeat") return;
     if (viewer.res.writableLength > MAX_BUFFER) { this.close(viewer, true, true); return; }
     if (viewer.blocked) return;
     const { type, ...data } = message;
@@ -564,6 +565,8 @@ export class BrowserLive {
   private async command(viewer: Viewer, args: string[], timeout = COMMAND_TIMEOUT_MS, person = false): Promise<ObjectValue> {
     if (!this.current(viewer)) throw new BrowserLiveError("This browser view is no longer available.", 409);
     const env = browserRuntimeEnv({ ...viewer.spec.env, AGENT_BROWSER_SESSION: viewer.session });
+    const started = performance.now();
+    const operation = args[0] === "stream" && (args[1] === "status" || args[1] === "enable") ? `stream-${args[1]}` : args[0] === "open" && args.length === 1 ? "launch" : "action";
     try {
       const { stdout } = await execute(viewer.spec.command, [...args, "--json", "--no-webmcp"], {
         env, timeout, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8", windowsHide: true,
@@ -577,8 +580,10 @@ export class BrowserLive {
         const detail = [result?.error, result?.message].filter((part): part is string => typeof part === "string").join(" ");
         throw Object.assign(new Error(detail ? `browser command failed: ${detail}` : "browser command failed"), { stdout });
       }
+      console.info(`browser-diag: command operation=${operation} outcome=ok durationMs=${Math.round(performance.now() - started)} viewer=${viewer.id}`);
       return data;
     } catch (error) {
+      console.warn(`browser-diag: command operation=${operation} outcome=${timedOut(error) ? "timeout" : viewer.abort.signal.aborted ? "aborted" : "error"} durationMs=${Math.round(performance.now() - started)} timeoutMs=${timeout} viewer=${viewer.id}`);
       if (timedOut(error)) throw new BrowserBusyError();
       console.warn("browser-live:", error);
       if (browserLaunchFailure(error)) {
@@ -615,10 +620,9 @@ export class BrowserLive {
     let status: ObjectValue;
     try { status = await this.command(viewer, ["stream", "status"], STATUS_PROBE_MS); }
     catch (error) {
-      // Only a bot call or a person's action can hold the engine past this read; with neither, it has hung.
-      if (!(error instanceof BrowserBusyError) || this.runtime.working(viewer.session)) throw error;
-      this.resetSession(viewer, "a status read the browser never answered");
-      throw new BrowserUnresponsiveError();
+      if (!(error instanceof BrowserBusyError)) throw error;
+      console.warn(`browser-live: status probe timed out session=${viewer.session} viewer=${viewer.id} working=${this.runtime.working(viewer.session)}; retrying without resetting the browser`);
+      throw new BrowserStatusTimeoutError();
     }
     if (status.enabled !== true) {
       try { status = await this.command(viewer, ["stream", "enable"]); }
@@ -636,15 +640,26 @@ export class BrowserLive {
 
   private async connectWhenFree(viewer: Viewer): Promise<number> {
     const deadline = Date.now() + BUSY_LIMIT_MS;
+    let idleTimeouts = 0;
     for (let attempt = 0; ; attempt++) {
       try { return await this.connect(viewer); }
       catch (error) {
         if (!(error instanceof BrowserBusyError) || !this.current(viewer)) throw error;
+        idleTimeouts = error instanceof BrowserStatusTimeoutError && !this.runtime.working(viewer.session) ? idleTimeouts + 1 : 0;
+        if (idleTimeouts >= 3 && !this.runtime.working(viewer.session)) {
+          console.warn(`browser-live: repeated idle timeouts session=${viewer.session} viewer=${viewer.id} count=${idleTimeouts}; resetting browser`);
+          this.resetSession(viewer, "repeated unanswered status probes");
+          throw new BrowserUnresponsiveError();
+        }
         if (Date.now() >= deadline) throw new BrowserBusyError("The bot is still using this browser. Reconnect when it has finished.");
       }
       viewer.waiting = true;
       this.startEvents(viewer);
       this.send(viewer, BROWSER_WAITING);
+      if (!viewer.heartbeat) {
+        viewer.heartbeat = setInterval(() => this.send(viewer, { type: "heartbeat" }), HEARTBEAT_MS);
+        viewer.heartbeat.unref();
+      }
       await new Promise<void>((resolve) => {
         const done = () => { clearTimeout(timer); viewer.abort.signal.removeEventListener("abort", done); resolve(); };
         const timer = setTimeout(done, BUSY_RETRY_MS[Math.min(attempt, BUSY_RETRY_MS.length - 1)]);
@@ -788,8 +803,11 @@ export class BrowserLive {
     if (this.ownedBy(viewer)) this.clock(viewer.session).watched(true);
     options.res.once("close", () => this.close(viewer, true, true));
     options.res.once("error", () => this.close(viewer, true, true));
+    const openedAt = performance.now();
+    console.info(`browser-diag: view opening viewer=${viewer.id} resumed=${Boolean(options.resume)}`);
     try {
       const port = await this.connectWhenFree(viewer);
+      console.info(`browser-diag: engine ready viewer=${viewer.id} durationMs=${Math.round(performance.now() - openedAt)}`);
       if (!this.current(viewer)) throw new BrowserLiveError("This browser view is no longer available.", 409);
       // Before its frames flow: the person's next view carries on with their hold, after a dropped stream or a reopened app.
       await this.carryOn(viewer);
@@ -801,9 +819,14 @@ export class BrowserLive {
       const socket = new WebSocket(`ws://127.0.0.1:${port}/?pacing=ack&maxFps=15`);
       viewer.socket = socket;
       this.startEvents(viewer);
-      viewer.waiting = false;
-      this.send(viewer, { type: "ready", viewerId: viewer.id, inputBatch: INPUT_BATCH_LIMIT });
-      this.control(viewer.session);
+      socket.addEventListener("open", () => {
+        if (!this.current(viewer)) return;
+        viewer.waiting = false;
+        this.send(viewer, { type: "ready", viewerId: viewer.id, inputBatch: INPUT_BATCH_LIMIT });
+        this.control(viewer.session);
+        console.info(`browser-live: upstream connected session=${viewer.session} viewer=${viewer.id} port=${port}`);
+      }, { once: true });
+      let firstFrame = false;
       socket.addEventListener("message", (event) => {
         if (!this.current(viewer)) { this.close(viewer, true, true); return; }
         if (typeof event.data !== "string" || event.data.length > MAX_BUFFER) { this.close(viewer); return; }
@@ -813,11 +836,25 @@ export class BrowserLive {
         if (!message) { if (raw?.type === "frame") this.close(viewer); return; }
         const heldBy = this.runtime.heldBy(viewer.session);
         if (heldBy && heldBy !== viewer.person && ["tabs", "url"].includes(String(message.type))) return;
-        if (message.type === "frame") this.frame(viewer, message);
-        else this.send(viewer, message);
+        if (message.type === "frame") {
+          if (!firstFrame) {
+            firstFrame = true;
+            console.info(`browser-diag: first frame viewer=${viewer.id} durationMs=${Math.round(performance.now() - openedAt)}`);
+          }
+          this.frame(viewer, message);
+        } else this.send(viewer, message);
       });
-      socket.addEventListener("error", () => { if (!viewer.restarting) { this.send(viewer, { type: "error", retryable: true, message: "The browser stream disconnected." }); this.close(viewer); } });
-      socket.addEventListener("close", () => { if (!viewer.restarting) this.close(viewer); });
+      socket.addEventListener("error", () => {
+        if (viewer.closed || viewer.restarting) return;
+        console.warn(`browser-live: upstream socket error session=${viewer.session} viewer=${viewer.id} port=${port} state=${socket.readyState}`);
+        this.send(viewer, { type: "error", retryable: true, message: "The browser stream disconnected." });
+        this.close(viewer);
+      });
+      socket.addEventListener("close", (event) => {
+        if (viewer.closed || viewer.restarting) return;
+        console.warn(`browser-live: upstream socket closed session=${viewer.session} viewer=${viewer.id} port=${port} code=${event.code} clean=${event.wasClean}`);
+        this.close(viewer);
+      });
       // Handlers go on before awaiting the upgrade: upstream sends its cached status, tabs and first frame right after opening.
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new BrowserLiveError("The browser stream did not connect. Reopen the browser panel.", 503)), 10_000);
@@ -827,9 +864,14 @@ export class BrowserLive {
         socket.addEventListener("open", () => { clearTimeout(timer); socket.removeEventListener("error", failed); socket.removeEventListener("close", failed); resolve(); }, { once: true });
       });
       if (!this.current(viewer)) { this.close(viewer); return; }
+      clearInterval(viewer.heartbeat);
       viewer.heartbeat = setInterval(() => {
         const oldest = viewer.unacked.values().next().value;
-        if (!this.current(viewer) || (oldest !== undefined && Date.now() - oldest > 2 * HEARTBEAT_MS)) { this.close(viewer, true, true); return; }
+        if (!this.current(viewer)) { this.close(viewer, true, true); return; }
+        if (oldest !== undefined && Date.now() - oldest > 2 * HEARTBEAT_MS) {
+          console.warn(`browser-live: frame acknowledgement timed out session=${viewer.session} viewer=${viewer.id} unacked=${viewer.unacked.size} ageMs=${Date.now() - oldest}`);
+          this.close(viewer, true, true); return;
+        }
         this.control(viewer.session);
         this.send(viewer, { type: "heartbeat" });
       }, HEARTBEAT_MS);
@@ -925,6 +967,8 @@ export class BrowserLive {
     }
     if (viewer.pendingActions >= 32) throw new BrowserLiveError("Too many browser actions are pending. Try again shortly.", 429);
     viewer.pendingActions += 1;
+    const actionStarted = performance.now();
+    const pendingAtStart = viewer.pendingActions;
     let refused = false;
     try {
       await this.runtime.withHumanAction(viewer.session, viewer.person, async () => {
@@ -941,12 +985,15 @@ export class BrowserLive {
       });
       return refused ? { ok: true, notice: INPUT_REFUSED } : { ok: true };
     } catch (error) {
+      console.warn(`browser-diag: human action failed viewer=${viewer.id} type=${action.type} durationMs=${Math.round(performance.now() - actionStarted)} pending=${pendingAtStart} reason=${error instanceof BrowserInputUnconfirmedError ? "input-unconfirmed" : error instanceof BrowserBusyError ? "busy" : error instanceof BrowserLiveError ? "live-error" : "other"}`);
       if (error instanceof BrowserInputUnconfirmedError && viewer.pendingActions === 1 && await this.restartUnresponsive(viewer)) {
         throw new BrowserLiveError(restartedNote(viewer.spec.env?.AGENT_BROWSER_RESTORE_SAVE !== "never"), 503);
       }
       throw error instanceof BrowserLiveError ? error : this.refusal(viewer, "Browser control changed. Try again.");
     }
     finally {
+      const elapsed = Math.round(performance.now() - actionStarted);
+      if (elapsed >= 500 || pendingAtStart > 4 || refused) console.info(`browser-diag: human action viewer=${viewer.id} type=${action.type} durationMs=${elapsed} pending=${pendingAtStart} refused=${refused}`);
       viewer.pendingActions -= 1;
       if (viewer.closed && viewer.pendingActions === 0) viewer.idle?.();
       this.control(viewer.session);

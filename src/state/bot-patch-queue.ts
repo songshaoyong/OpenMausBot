@@ -41,6 +41,7 @@ export type BotUpdatePatch = Partial<
     | "composio"
     | "browser"
     | "browserProfile"
+    | "localVmSharedDesktop"
     | "memoryUpkeep"
     | "cacheKeepWarm"
     | "mcpServers"

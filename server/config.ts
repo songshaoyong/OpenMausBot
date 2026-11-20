@@ -38,6 +38,8 @@ const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const LEGACY_BROWSER_PROFILE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 const BROWSER_PROFILE_ID = /^[a-z0-9_-]{1,40}$/;
+/** Shared desktop ids become container and workspace names, so they follow the same lowercase-safe shape. */
+const LOCAL_VM_SHARED_DESKTOP_ID = /^[a-z0-9-]{1,80}$/;
 
 /** Fish Audio speech models (`tts.fishModel`); unset means `s2.1-pro`, and `s2.1-pro-free` is Fish's free tier. */
 export const FISH_TTS_MODELS = ["s2.1-pro", "s2.1-pro-free"] as const;
@@ -211,6 +213,24 @@ const browserProfilesSchema = z.array(browserProfileSchema).max(20).superRefine(
       code: "custom",
       path: [index, "id"],
       message: `browser profile id ${profile.id} is duplicated`,
+    });
+  });
+});
+/** Named shared desktop containers. Unlike a browser profile, each entry owns a real container and workspace. */
+const localVmSharedDesktopsSchema = z.array(z.object({
+  id: z.string().regex(LOCAL_VM_SHARED_DESKTOP_ID),
+  name: z.string().trim().min(1).max(40),
+}).strict()).max(20).superRefine((desktops, ctx) => {
+  const seen = new Set<string>();
+  desktops.forEach((desktop, index) => {
+    if (!seen.has(desktop.id)) {
+      seen.add(desktop.id);
+      return;
+    }
+    ctx.addIssue({
+      code: "custom",
+      path: [index, "id"],
+      message: `shared desktop id ${desktop.id} is duplicated`,
     });
   });
 });
@@ -408,6 +428,7 @@ const appConfigSchema = z.object({
   loopGuard: loopGuardConfigSchema.optional(),
   safetyFloor: z.object({ enabled: z.boolean().optional() }).strict().optional(), // off by default: safetyFloorEnabled in server/safety-floor-gate.ts
   localVm: localVmConfigSchema.optional(),
+  localVmSharedDesktops: localVmSharedDesktopsSchema.optional(),
   features: featureConfigSchema.optional(),
   onboarding: onboardingConfigSchema.optional(),
   browserEngine: browserEngineConfigSchema.optional(),
@@ -483,6 +504,7 @@ export interface AppConfig extends HelperConfig {
   context?: { rebuildBytes?: number; compactAt?: number; autoCompact?: boolean; roomCompactAt?: number; roomSessions?: boolean; replayToolHistory?: boolean };
   memory?: { captureQuietMs?: number; tidyHour?: number };
   localVm?: { mode?: "shared" | "per-bot" | "pool"; maxInstances?: number; idleTimeoutMinutes?: number; preserveInstalledApps?: boolean; memoryGb?: number; cpus?: number; publish?: Array<{ guest: number; host?: number }>; share?: { baseUrl: string; viewerPort?: number; servicePort?: number } };
+  localVmSharedDesktops?: Array<{ id: string; name: string }>;
   features?: { skillAuthoring?: boolean; skillReview?: boolean; skillReviewSteps?: number; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; claudeUserSkills?: boolean; llmThreadTitles?: boolean; smartSetupChoices?: boolean; autoRecall?: boolean; skillsLibrary?: boolean; shareLearnedSkills?: "off" | "ask" | "auto"; roomMemoryCapture?: boolean; parallelRoomJobs?: boolean; acpPlanLines?: boolean; agentsToolBridge?: boolean; savedSteps?: boolean; usbPhoneTakeover?: boolean; cloudComputerAutoReplace?: boolean; phonePush?: boolean };
   onboarding?: { completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; firstTurnAt?: string };
   browserProfiles?: BrowserProfile[];
@@ -921,6 +943,7 @@ export function saveConfig(
     disk[key] = merged;
   }
   keepImageModels();
+  if (checkedPatch.localVmSharedDesktops !== undefined) disk.localVmSharedDesktops = checkedPatch.localVmSharedDesktops;
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
   for (const key of ["language", "computerName", "everyBotRules"] as const) if (checkedPatch[key] !== undefined) disk[key] = checkedPatch[key];
   if (checkedPatch.customDomain !== undefined) disk.customDomain = checkedPatch.customDomain;
