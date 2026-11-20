@@ -309,6 +309,19 @@ describe("handing browser control back", () => {
     expect(h.transport.release).toHaveBeenCalledOnce();
   });
 
+  it("keeps a pinned hold across a connection's temporary loss of control state", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.control.keep(true);
+    h.interact(press, lift); await settle();
+    h.server.owned = false;
+    h.control.observe();
+    h.server.owned = true;
+    h.control.observe();
+    vi.advanceTimersByTime(30_000); await settle();
+    expect(h.transport.release).not.toHaveBeenCalled();
+  });
+
   it("hands back when the panel closes only if nothing is held, unsent or running", async () => {
     const idle = harness();
     idle.interact(press, lift); await settle();

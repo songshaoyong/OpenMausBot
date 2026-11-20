@@ -494,7 +494,7 @@ describe("the v1 input queue", () => {
     const onError = vi.fn();
     const queue = createLiveInputQueue(send, onError);
     queue.enqueue(key("keyDown", "held")); queue.enqueue(key("keyUp", "held"));
-    for (let n = 0; n < 40; n++) queue.enqueue(key("keyDown", String(n)));
+    for (let n = 0; n < 100; n++) queue.enqueue(key("keyDown", String(n)));
     queue.enqueue(up);
     queue.enqueue({ type: "reload" });
     expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: expect.stringContaining("Reconnect the view before typing again") }));

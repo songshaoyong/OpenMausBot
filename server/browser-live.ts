@@ -848,12 +848,12 @@ export class BrowserLive {
         if (viewer.closed || viewer.restarting) return;
         console.warn(`browser-live: upstream socket error session=${viewer.session} viewer=${viewer.id} port=${port} state=${socket.readyState}`);
         this.send(viewer, { type: "error", retryable: true, message: "The browser stream disconnected." });
-        this.close(viewer);
+        this.close(viewer, true, true);
       });
       socket.addEventListener("close", (event) => {
         if (viewer.closed || viewer.restarting) return;
         console.warn(`browser-live: upstream socket closed session=${viewer.session} viewer=${viewer.id} port=${port} code=${event.code} clean=${event.wasClean}`);
-        this.close(viewer);
+        this.close(viewer, true, true);
       });
       // Handlers go on before awaiting the upgrade: upstream sends its cached status, tabs and first frame right after opening.
       await new Promise<void>((resolve, reject) => {

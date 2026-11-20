@@ -153,7 +153,7 @@ export function LiveBrowser({ bot, signIn, page }: { bot: Bot; signIn?: BrowserS
     const previous = controlRef.current;
     controlRef.current = next;
     setControl(next);
-    if (previous?.controller === "you" && next?.controller !== "you") setKept(false);
+    if (previous?.controller === "you" && next !== null && next.controller !== "you" && !next.owned) setKept(false);
     if (next === null) setTakeStatus("");
     for (const listener of controlListeners.current) listener(next);
     browserControl.current?.observe();

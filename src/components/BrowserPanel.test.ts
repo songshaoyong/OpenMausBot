@@ -273,13 +273,21 @@ describe("who holds the browser", () => {
     expect(socket.sent.at(-1)).toEqual({ type: "releaseControl" });
   });
 
-  it("says what keeping the browser means while the person has it", async () => {
+  it("says what keeping the browser means while the person has it, including across a brief stream reconnect", async () => {
     const socket = await streaming("agent");
-    await act(async () => pill().click());
-    await act(async () => socket.control("you"));
-    await flush();
+    vi.useFakeTimers();
+    await act(async () => { pill().click(); });
+    await act(async () => { socket.control("you"); });
     expect(pill().title).toBe(t("browser.control.keptHint", { name: "Pepper" }));
     expect(pill().title).toContain("5 minutes");
+    await act(async () => { socket.refuse(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    const reconnected = FakeSocket.instances.at(-1)!;
+    expect(reconnected).not.toBe(socket);
+    await act(async () => { reconnected.open(); reconnected.control("you", { owned: true }); });
+    expect(pill().title).toBe(t("browser.control.keptHint", { name: "Pepper" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(reconnected.sent).not.toContainEqual({ type: "releaseControl" });
   });
 
   it("shows the person their hold from another of their views, and hands it back from here", async () => {

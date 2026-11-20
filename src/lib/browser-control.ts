@@ -175,6 +175,7 @@ export function createBrowserControl(options: {
         state = "bot"; held.clear(); dropped.clear(); clearTimeout(idle); idle = undefined;
       }
       ownedBefore = owned;
+      if (owned && state === "bot") state = "held";
       if (idle === undefined && owned) arm();
     },
     takeControl() {

@@ -185,6 +185,15 @@ describe("authenticated browser viewer relay", () => {
     expect(a.res.writableEnded).toBe(true);
     expect(a.res.events("error")).toHaveLength(1);
   });
+  it("keeps a person's control when the upstream stream drops, so its reconnect carries on", async () => {
+    const a = await open(); await a.action({ type: "take" });
+    a.socket.dispatchEvent(new Event("error"));
+    expect(held.get("profile-a")).toBe("admin-a");
+    const b = await open({ resume: a.res.id });
+    expect(b.res.events("control").at(-1)).toEqual({ held: true, owned: true, controlling: true });
+    await b.action({ type: "release" });
+    expect(held.has("profile-a")).toBe(false);
+  });
   it("does not write premature headers when another view takes control during startup", async () => {
     const a = await open();
     let finish!: (value: ReturnType<typeof output>) => void;
@@ -489,8 +498,12 @@ describe("authenticated browser viewer relay", () => {
     expect(nativeInput.mock.calls[0]?.[1]).toMatchObject({ method: "POST", redirect: "error", headers: { Origin: "http://127.0.0.1:43210" } });
     expect(JSON.parse(nativeInput.mock.calls[0]?.[1].body)).toEqual({ action: "input_keyboard", type: "keyDown", key: "a", text: "a" });
     expect(a.socket.messages).toHaveLength(0);
-    a.socket.close(); expect(held.has("profile-a")).toBe(false);
+    a.socket.close(); expect(held.get("profile-a")).toBe("admin-a");
     expect(execute).toHaveBeenCalledTimes(2); // No close command: logins/browser survive viewers.
+    const back = await open({ resume: a.res.id });
+    expect(back.res.events("control").at(-1)).toEqual({ held: true, owned: true, controlling: true });
+    await back.action({ type: "release" });
+    expect(held.has("profile-a")).toBe(false);
   });
   it("withholds login frames/tabs/URLs from another person's views, advances their upstream ACK and restores the newest frame on release", async () => {
     const a = await open(); const b = await open({ botId: "bot-b", owner: "admin-b" });
@@ -878,8 +891,10 @@ describe("authenticated browser viewer relay", () => {
     const a = await open(); await a.action({ type: "take" });
     await a.action({ type: "input_keyboard", eventType: "keyDown", key: "Shift", code: "ShiftLeft", modifiers: 8 });
     await a.action({ type: "input_mouse", eventType: "mousePressed", x: 12, y: 20, button: "left" });
+    nativeInput.mockRejectedValue(new Error("relay closed"));
     if (ending === "release") await a.action({ type: "release" }); else a.socket.close();
-    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("Restart");
+    if (ending === "release") await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("Restart");
+    else await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("paused");
     const b = ending === "release" ? a : await open();
     await b.action({ type: "restart" });
     await expect(runtime.withAgentAction("profile-a", async () => true)).resolves.toBe(true);
@@ -907,7 +922,14 @@ describe("authenticated browser viewer relay", () => {
     if (ending === "release") await a.action({ type: "release" }); else a.socket.close();
     await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("paused");
     finish(Response.json({ success: true })); await input;
-    await expect(runtime.withAgentAction("profile-a", async () => true)).resolves.toBe(true);
+    if (ending === "release") await expect(runtime.withAgentAction("profile-a", async () => true)).resolves.toBe(true);
+    else {
+      await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("paused");
+      const reopened = await open({ resume: a.res.id });
+      expect(reopened.res.events("control").at(-1)).toEqual({ held: true, owned: true, controlling: true });
+      await reopened.action({ type: "release" });
+      await expect(runtime.withAgentAction("profile-a", async () => true)).resolves.toBe(true);
+    }
   });
   it("restarts only through exclusive recovery and closes all views after native close succeeds", async () => {
     runtime = new BrowserRuntime(); live = new BrowserLive({ runtime });

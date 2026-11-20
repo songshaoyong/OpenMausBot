@@ -19,7 +19,7 @@ const RECONNECT_DELAYS = [1_000, 2_000, 4_000, 8_000, 15_000];
 // The server sends a heartbeat every 10 s: a view that heard nothing for longer lost its stream without an error.
 const SILENT_MS = 25_000;
 const SILENCE_CHECK_MS = 5_000;
-const QUEUE_LIMIT = 32;
+const QUEUE_LIMIT = 96;
 const CHAR_LIMIT = 4_096;
 /** Under the 32 KB the server reads of one action's body. */
 const BATCH_BYTES = 24_000;
@@ -269,6 +269,7 @@ export function createLiveStreamClient(botId: string, events: PreviewStreamEvent
     listen("heartbeat", () => { attempts = 0; });
     listen("frame", (data) => {
       if (!viewerId || typeof data.data !== "string" || typeof data.seq !== "number") return;
+      attempts = 0;
       const binary = atob(data.data);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -325,7 +326,7 @@ export function createLiveStreamClient(botId: string, events: PreviewStreamEvent
   // Switching apps, sleep or a network change can drop the stream unnoticed or outlast the retries: check again on return.
   const wake = (focused: boolean) => {
     if (closed) return;
-    if (source && viewerId && Date.now() - heardAt > SILENT_MS) dropped(source, true);
+    if (source && Date.now() - heardAt > SILENT_MS) dropped(source, true);
     if (!focused || (retry === null && !(stopped && revivable))) return;
     if (retry !== null) clearTimeout(retry);
     stopped = false;
