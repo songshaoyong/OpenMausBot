@@ -295,6 +295,11 @@ describe("Auto rooms ask the decision model who answers", { timeout: 90_000 }, (
   it("saving a key turns it on with the room job; a rejected key is not saved", async () => {
     const off = await api("PUT", "/api/config", { decider: { enabled: false, jobs: { roomRouting: false } } });
     expect(off.body.decider).toMatchObject({ enabled: false, jobs: { roomRouting: false } });
+    const asked = routeRequests().length;
+    expect((await round(room.id, "Can the Theo title review this?")).replies.map((reply) => reply.from!.name)).toEqual(["Theo"]);
+    expect((await round(room.id, "Can the Maya title and Theo title review this?")).replies.map((reply) => reply.from!.name)).toEqual(["Ravi"]);
+    expect((await round(room.id, "@Maya ask about the Theo title.")).replies.map((reply) => reply.from!.name)).toEqual(["Maya"]);
+    expect(routeRequests()).toHaveLength(asked);
     const rejected = await api("PUT", "/api/config", { decider: { key: "tsk_bad" } });
     expect(rejected.status).toBe(400);
     expect((await api("GET", "/api/config")).body.decider).toMatchObject({ enabled: false });

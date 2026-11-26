@@ -21,6 +21,7 @@ import {
 import type { LocalVmInventoryEntry } from "../local-vm-inventory.ts";
 import { viewerTargetId } from "../../shared/desktop-viewer.ts";
 import { localVmViewerStatus } from "../desktop-viewer-targets.ts";
+import { namedDesktopControlKey } from "../host/shared-vm-control.ts";
 import { localVmShare } from "../local-vm-share.ts";
 import { keepFirefoxProfileBeforeRemove } from "../local-vm-profiles.ts";
 import type { ComputerIdleTimer } from "../computer-idle.ts";
@@ -493,6 +494,9 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
         if (action === "remove") {
           saveSharedDesktops((cfg.localVmSharedDesktops ?? []).filter((candidate) => candidate.id !== desktop.id));
           localVmIdleFor(target).cancel();
+          // No panel can show this desktop again, so a hold left on it would outlive every view.
+          const key = namedDesktopControlKey(target.key);
+          if (key) computerControl.release(key);
         } else if (action === "stop") {
           localVmIdleFor(target).cancel();
         } else {

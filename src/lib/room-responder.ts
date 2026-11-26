@@ -25,7 +25,7 @@ export function responderTitle(group: Group, members: Bot[], jevOn: boolean): st
       : responder.kind === "auto"
         ? jevOn
           ? t("room.responder.auto")
-          : t("room.responder.autoOff", { name: defaultResponderName(group, members) ?? t("room.responder.leadFallback") })
+          : t("room.responder.localAuto", { name: defaultResponderName(group, members) ?? t("room.responder.leadFallback") })
         : t("room.responder.lead", { name: lead?.name ?? t("room.responder.leadFallback") });
 }
 

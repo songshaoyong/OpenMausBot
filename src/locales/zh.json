@@ -4856,6 +4856,8 @@
   "room.responder.mentionsOption": "仅在被提及时",
   "room.responder.auto": "由决策模型挑选谁回复每一条普通消息；@提及会覆盖此设置",
   "room.responder.autoOff": "决策模型已关闭，因此普通消息会发给 {name}；@提及会覆盖此设置",
+  "room.responder.localAuto": "消息中只匹配到一个机器人职位时，由该机器人回复；否则由 {name} 回复。你也可以直接 @ 指定。",
+  "room.responder.localAutoShort": "按机器人职位匹配，否则由 {name} 回复",
   "room.responder.autoOption": "自动",
   "room.responder.autoOptionOff": "自动",
   "room.responder.jevOffHint": "决策模型已关闭，因此这个自动模式的群组聊天中由 {name} 回复普通消息。",

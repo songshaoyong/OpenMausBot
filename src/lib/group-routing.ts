@@ -32,8 +32,8 @@ export function groupResponseHint(group: Group, members: Bot[], { jevOn = true }
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return t("room.hint.everyone");
   if (value.kind === "mentions") return t("room.hint.mentions");
-  if (value.kind === "auto" && jevOn) return t("room.hint.auto");
   const name = defaultResponderName(group, members) ?? t("room.hint.leadFallback");
+  if (value.kind === "auto") return jevOn ? t("room.hint.auto") : t("room.responder.localAuto", { name });
   return t("room.hint.lead", { name });
 }
 
@@ -42,7 +42,9 @@ export function groupComposerHint(group: Group, members: Bot[], { jevOn = true }
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return t("composer.hint.everyone");
   if (value.kind === "mentions") return t("composer.hint.mentions");
-  if (value.kind === "auto" && jevOn) return t("composer.hint.auto");
+  if (value.kind === "auto") return jevOn ? t("composer.hint.auto") : t("room.responder.localAutoShort", {
+    name: defaultResponderName(group, members) ?? t("composer.hint.lead"),
+  });
   return t("composer.hint.responder", {
     name: defaultResponderName(group, members) ?? t("composer.hint.lead"),
   });

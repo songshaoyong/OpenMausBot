@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ComputerControl } from "../computer-control.ts";
-import { SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget, poolLocalVmTarget, type LocalVmTarget } from "../container-computer.ts";
+import { SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget, poolLocalVmTarget, sharedDesktopLocalVmTarget, type LocalVmTarget } from "../container-computer.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import type { BotRecord } from "../store.ts";
 import { teamComputerOwner } from "../team-computers.ts";
@@ -21,6 +21,8 @@ type Fixture = {
   /** threadId → the Local VM its running turn works on */
   vmTurns?: Record<string, LocalVmTarget>;
   busy?: boolean;
+  /** botId → the named shared desktop it is bound to */
+  named?: Record<string, LocalVmTarget>;
 };
 
 function fixture(f: Fixture = {}) {
@@ -49,6 +51,7 @@ function fixture(f: Fixture = {}) {
     place: (bot, threadId) => { places++; return f.tasks?.[threadId]?.[1] ?? bot.computer; },
     turnVmTargets: { get: (threadId) => f.vmTurns?.[threadId] },
     busy: () => f.busy ?? false,
+    namedDesktop: (bot) => f.named?.[bot.id] ?? null,
   });
   const bot = (id: string) => bots.find(candidate => candidate.id === id)!;
   return { control, vm, bot, setMode: (next: typeof mode) => { mode = next; }, places: () => places };
@@ -416,5 +419,61 @@ describe("what a hold on the shared desktop reaches", () => {
     setMode("shared");
     changed();
     expect([control.snapshot("ada").held, control.snapshot("cy").held, control.snapshot(DESK).held]).toEqual([false, true, false]);
+  });
+});
+
+describe("a named shared desktop", () => {
+  const desk = sharedDesktopLocalVmTarget("project-a");
+  const deskKey = `desktop:${viewerTargetId(desk)}`;
+  const bound = (): Fixture => ({
+    mode: "per-bot", bots: [{ id: "ada" }, { id: "bea" }, { id: "cy" }], named: { ada: desk, bea: desk },
+  });
+
+  it("is the key every bot bound to it holds, whatever the Local VM mode", () => {
+    const perBot = fixture(bound());
+    expect(perBot.vm.keyFor(perBot.bot("ada"))).toBe(deskKey);
+    expect(perBot.vm.keyFor(perBot.bot("cy"))).toBe("cy");
+    const shared = fixture({ mode: "shared", bots: [{ id: "ada" }, { id: "cy" }], named: { ada: desk } });
+    expect(shared.vm.keyFor(shared.bot("ada"))).toBe(deskKey);
+    expect(shared.vm.keyFor(shared.bot("cy"))).toBe(DESK);
+  });
+
+  it("takes the hold its panel names, and leaves every other desktop on the bot's own key", () => {
+    const { vm, bot } = fixture(bound());
+    expect(vm.holdKey(bot("ada"), "t", viewerTargetId(desk))).toBe(deskKey);
+    expect(vm.holdKey(bot("ada"), "t", viewerTargetId(perBotLocalVmTarget("bea")))).toBe("ada");
+    expect(vm.holdKey(bot("cy"), "t", viewerTargetId(desk))).toBe("cy");
+  });
+
+  it("pauses every bot on it and the turns working there, and no bot elsewhere", () => {
+    const { control, vm } = fixture(bound());
+    control.take(deskKey);
+    expect(vm.snapshot("ada", "t").held).toBe(true);
+    expect(vm.botSnapshot("bea").held).toBe(true);
+    expect(vm.botSnapshot("cy").held).toBe(false);
+    expect(vm.membersOf(deskKey)).toEqual(["ada", "bea"]);
+    expect(vm.personHolds(`computer:vm:${desk.key}`)).toBe(true);
+    expect(vm.personHolds(`computer:vm:${perBotLocalVmTarget("ada").key}`)).toBe(false);
+    expect(vm.heldOnTarget(desk)).toBe(true);
+    expect(vm.heldOnTarget(perBotLocalVmTarget("ada"))).toBe(false);
+  });
+
+  it("is the key a phone's lease must own, and a take a phone's lease arms", () => {
+    const { control, vm, bot } = fixture(bound());
+    expect(vm.leaseKey(bot("ada"))).toBe(deskKey);
+    control.acquireLease(deskKey, "phone-lease-0123456789");
+    expect(vm.armed(phone, bot("ada"), "t", deskKey, viewerTargetId(desk))).toBe(true);
+    expect(vm.armed(desktop, bot("ada"), "t", deskKey)).toBe(false);
+  });
+
+  it("still hands back to the key its lease owns after the bot's binding changes", () => {
+    const f = bound();
+    const { control, vm, bot } = fixture(f);
+    const lease = "phone-lease-0123456789";
+    control.acquireLease(deskKey, lease);
+    delete f.named;
+    expect(vm.check(bot("ada"), "t", lease).held).toBe(true);
+    vm.release(bot("ada"), "t", lease);
+    expect(control.snapshot(deskKey).held).toBe(false);
   });
 });

@@ -19,7 +19,7 @@ export function ResponderPage({ group, members }: { group: Group; members: Bot[]
     {
       choice: "auto",
       title: t("room.panel.responder.autoOption"),
-      hint: jevOn ? undefined : t("room.responder.autoOff", { name: defaultResponderName(group, members) ?? t("room.responder.leadFallback") }),
+      hint: jevOn ? undefined : t("room.responder.localAuto", { name: defaultResponderName(group, members) ?? t("room.responder.leadFallback") }),
     },
     { choice: "everyone", title: t("room.panel.responder.everyone") },
     { choice: "mentions", title: t("room.panel.responder.mentions") },

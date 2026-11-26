@@ -5238,6 +5238,8 @@
   "room.responder.mentionsOption": "Only when mentioned",
   "room.responder.auto": "The decision model picks who answers each plain message; @mentions override this",
   "room.responder.autoOff": "The decision model is off, so plain messages go to {name}; @mentions override this",
+  "room.responder.localAuto": "Matches a unique bot role in your message; otherwise {name} answers. @mentions override this.",
+  "room.responder.localAutoShort": "Matches a bot role, otherwise {name} answers",
   "room.responder.autoOption": "Auto",
   "room.responder.autoOptionOff": "Auto",
   "room.responder.jevOffHint": "The decision model is off, so {name} answers plain messages in this Auto room.",

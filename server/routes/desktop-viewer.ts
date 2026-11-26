@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import { request, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
+import { DESKTOP_VIEWER_TARGET_BODY } from "../../shared/desktop-viewer.ts";
 import { isSameOrigin, type RequestAuth } from "../request-auth.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 import { createUpgrades, type Upgrades } from "./upgrades.ts";
 
-const ROUTE = /^\/api\/desktop-viewer\/(local\/(?:shared|bot-[a-f0-9]{64}|pool-\d+)|vps\/[\w-]+)(\/websockify)?$/;
+// Built from the shared grammar, so every desktop kind the proxy passes through is accepted here too.
+const ROUTE = new RegExp(`^/api/desktop-viewer/(${DESKTOP_VIEWER_TARGET_BODY})(/websockify)?$`);
 const HANDSHAKE_MS = 10_000;
 const RECHECK_MS = 5_000;
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

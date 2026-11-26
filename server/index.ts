@@ -323,7 +323,7 @@ import * as tts from "./tts/index.ts";
 import { voiceNoteFailure } from "./tts/errors.ts";
 import { createDecider, deciderReady, describeDecider } from "./decider/index.ts"; import { createExtractor, describeHelpers } from "./extractor/index.ts";
 import { createStopLineRoutes } from "./routes/stop-line.ts"; import { decideRoomResponder } from "./decider/room-routing.ts"; import { roomRoutingInput } from "./host/room-routing-input.ts";
-import { autoRoomDefault, roomTurnMembers } from "./room-routing-members.ts";
+import { autoRoomDefault, localRoomResponder, roomTurnMembers } from "./room-routing-members.ts";
 import { liveHistoryFrom, LiveSessionError, type LiveBot, type LiveHistoryMessage } from "./live-call.ts";
 import { LiveCallController, LiveCallSignedOutError } from "./live-call-controller.ts"; import { liveSessionWiring } from "./live-session-wiring.ts";
 import { liveCallSettings, liveSettingsFor, liveSettingsForClient, saveLiveSettings } from "./live-settings.ts"; import { azureLiveCallRefusal, liveScopeRefusal } from "./live-access.ts";
@@ -2809,7 +2809,9 @@ const store = new Store(
 );
 const sharedVm = createSharedVmControl({ control: computerControl, store, mode: () => CLOUD_HOME ? null : localVmMode(cfg), botForThread, turnBots: directTurnBots,
   teamTurns: teamComputerTurns, teamComputer: (bot) => inheritedTeamComputer(bot)?.id, place: (bot, threadId) => turnSurfacePlan(bot, undefined, threadId).computer,
-  turnVmTargets: { get: (threadId) => localVmThreadTargets.get(threadId) }, busy: () => localVmModeChangeBusy || localVmImageBusy || localVmLifecycleBusy.has(SHARED_LOCAL_VM_TARGET.key) });
+  turnVmTargets: { get: (threadId) => localVmThreadTargets.get(threadId) }, busy: () => localVmModeChangeBusy || localVmImageBusy || localVmLifecycleBusy.has(SHARED_LOCAL_VM_TARGET.key),
+  // A bot bound to a named shared desktop holds that desktop, not the bot's own key: every bot on it waits.
+  namedDesktop: (bot) => localVmSharedDesktopTargetForBot(bot.id) });
 const outsideLineage = createOutsideLineage({
   home: Boolean(CLOUD_HOME), team: Boolean(CLOUD_TEAM), solo: () => cloudHome?.solo() === true, store,
   confinedNow: (threadId) => guestDrivenTurns.has(threadId), activeRun: activeRoutineRunForThread,
@@ -4669,7 +4671,8 @@ const desktopViewer = createDesktopViewer({
         return connection;
       } };
     }
-    const targets = [SHARED_LOCAL_VM_TARGET, ...store.bots.map(bot => perBotLocalVmTarget(bot.id)),
+    const targets = [SHARED_LOCAL_VM_TARGET, ...(cfg.localVmSharedDesktops ?? []).map(desktop => sharedDesktopLocalVmTarget(desktop.id)),
+      ...store.bots.map(bot => perBotLocalVmTarget(bot.id)),
       ...Array.from({ length: localVmMaxInstances(cfg) }, (_, seat) => poolLocalVmTarget(seat))];
     const target = targets.find(target => viewerTargetId(target) === id);
     return target && localDesktopTarget(target, {
@@ -10131,7 +10134,7 @@ async function runClaimedGroupMemberTurn(
     bot.description && `About: ${bot.description}`,
     `Room members: ${roster}, and ${typeof userName === "string" ? `${userName} (the human)` : roomPeople(threadId, userName)}.`,
     readyGroup.bulletin.trim() && `Room bulletin (shared instructions for everyone):\n${readyGroup.bulletin.trim()}`,
-    `Reply as yourself, briefly and conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.${readyGroup.dm ? "" : ` To get ${typeof userName === "string" ? `${userName}'s` : "a person's"} attention or ask them something blocking, write @you.`} A "[reacted 👍 to …]" line is that person's whole reply to the message it names: 👍 means yes, go ahead when that message asked them something or offered to do something, and only got it (start no new work) when it just told them something; 👎 means no.`,
+    `Reply as yourself. Match the depth and structure to the request: keep quick answers short and use Markdown when it clarifies a detailed answer. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.${readyGroup.dm ? "" : ` To get ${typeof userName === "string" ? `${userName}'s` : "a person's"} attention or ask them something blocking, write @you.`} A "[reacted 👍 to …]" line is that person's whole reply to the message it names: 👍 means yes, go ahead when that message asked them something or offered to do something, and only got it (start no new work) when it just told them something; 👎 means no.`,
     outsideRoom.length > 0 && roomPeerRosterSystemPrompt(outsideRoom), sharedNamesNote(roomMembers.filter((member) => member.id !== bot.id), Boolean(integrations.agents)),
     integrations.agents && (CREDENTIAL_PROMPT + savedSecretsPrompt(botLogins.secretNamesFor(bot.id, vaultReaders.turn(threadId))) + (orchestration && !orchestration.roomHandoffId ? THREADS_PROMPT : "")).trim(),
     integrations.agents && (!orchestration || orchestration.roomHandoffId) && "For actual OpenMausBot teamwork, discover IDs with list_room_targets and use coordinate_bots for advice or work in this or another room. Do not substitute native coding helpers for these named bots. Consult only when needed to make a decision; no discussion step is mandatory. Give concrete responsibilities, exact accessible paths and acceptance checks. End your turn after assigning; busy teammates queue and results automatically resume you. When they return, finish the requested verification and give the user one final answer. Native helper names are not evidence that an OpenMausBot teammate participated. Plain @mentions are only for conversational replies in this room." + requesterRule,
@@ -10787,9 +10790,12 @@ function startGroupTurn(
     throw Object.assign(new Error("the selected goal coordinator is not an active room member"), { status: 409 });
   }
   // Read the room before this message is appended just below.
-  const replyBot = !group.dm && channelMode === "chat" && group.defaultResponder.kind === "auto" && replyTo?.role === "bot" ? routableMembers.find((member) => member.id === replyTo.from?.botId) : undefined;
-  const autoCandidate = !replyBot && !group.dm && channelMode === "chat" && group.defaultResponder.kind === "auto" && deciderReady(cfg, "roomRouting");
-  const historyBeforeSend = autoCandidate
+  const autoChat = !group.dm && channelMode === "chat" && group.defaultResponder.kind === "auto";
+  const replyBot = autoChat && replyTo?.role === "bot" ? routableMembers.find((member) => member.id === replyTo.from?.botId) : undefined;
+  const explicitlyAddressed = autoChat && roomResponders(text, availableMembers, { kind: "mentions" }, options.mentions).length > 0;
+  const autoCandidate = autoChat && !replyBot && !explicitlyAddressed && routableMembers.length > 1;
+  const useDecider = autoCandidate && deciderReady(cfg, "roomRouting");
+  const historyBeforeSend = useDecider
     ? (() => {
         const before = store.messagesFor(threadId);
         const narration = roomTurnNarrationIds(before);
@@ -10856,7 +10862,10 @@ function startGroupTurn(
     });
   }
   const pageBots = channelMode === "chat" ? pointedResponders(options.pointed, availableMembers, () => roomResponders(text, availableMembers, { kind: "mentions" }, options.mentions)) : [];
-  let responders = pageBots.length ? pageBots : roomResponders(text, members, !group.dm && channelMode === "chat" ? autoRoomDefault(group.defaultResponder, routableMembers, replyBot) : group.defaultResponder, options.mentions);
+  const canAutoRoute = autoCandidate && !pageBots.length && !mentionedArchived;
+  const autoRoute = canAutoRoute && useDecider;
+  const local = canAutoRoute ? localRoomResponder(extractTurnImages(text).text, routableMembers) : undefined;
+  let responders = pageBots.length ? pageBots : local ? [local] : roomResponders(text, members, !group.dm && channelMode === "chat" ? autoRoomDefault(group.defaultResponder, routableMembers, replyBot) : group.defaultResponder, options.mentions);
   if (!group.dm) {
     const addressed = stopWordPlacement(text) === "adjacent" ? undefined : message.id;
     for (const held of responders.filter(isHeld)) noteHeldSkip(group.id, threadId, held, addressed);
@@ -10873,10 +10882,6 @@ function startGroupTurn(
     const last = availableMembers.find((b) => b.id === lastSpeakerId) ?? availableMembers[0];
     responders = last ? [last] : [];
   }
-  // Auto's responders are a fallback until the decision model answers; the append and the return stay synchronous.
-  const autoRoute = autoCandidate && !goalCoordinator && !pageBots.length && routableMembers.length > 1 &&
-    roomResponders(text, availableMembers, { kind: "mentions" }, options.mentions).length === 0;
-
   if (!responders.length && !goalCoordinator && !autoRoute) {
     const defaultArchivedId = group.defaultResponder.kind === "member" ? group.defaultResponder.botId : undefined;
     const defaultArchived = archived.find((member) => member.id === defaultArchivedId);
@@ -14563,7 +14568,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           (group) =>
             group.dm === true &&
             group.memberIds.length === 2 &&
-            group.memberIds.every((botId) => mapped.has(botId)),
+            group.memberIds.every((botId) => mapped.has(botId)) &&
+            visible.group(group.id) && visible.thread(group.threadId),
         )
         .map((group) => ({
           groupId: group.id,

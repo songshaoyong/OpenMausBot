@@ -153,7 +153,7 @@ describe("Who responds", () => {
     render(room({ defaultResponder: { kind: "auto", fallbackBotId: "paper" } }));
     click($('[data-panel-page="responder"]'));
     await settle();
-    expect($('[data-panel-choice="auto"]')?.textContent).toBe("Let MausBot chooseThe decision model is off, so plain messages go to Paperwork; @mentions override this");
+    expect($('[data-panel-choice="auto"]')?.textContent).toBe("Let MausBot chooseMatches a unique bot role in your message; otherwise Paperwork answers. @mentions override this.");
     expect($('[data-panel-choice="auto"]')?.getAttribute("aria-checked")).toBe("true");
   });
 });

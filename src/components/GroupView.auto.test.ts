@@ -50,7 +50,7 @@ describe("room responder selector", () => {
     fixture.config = jev(false);
     const markup = renderToStaticMarkup(createElement(DefaultResponderSelect, { group: room({ kind: "auto", fallbackBotId: "theo" }), members }));
     expect(markup).toContain('<option value="auto" selected="">Auto</option>');
-    expect(markup).toContain("The decision model is off, so plain messages go to Theo");
+    expect(markup).toContain("Matches a unique bot role in your message; otherwise Theo answers.");
   });
 
   it("uses the neutral wording in the Chinese selector with Workers AI", async () => {

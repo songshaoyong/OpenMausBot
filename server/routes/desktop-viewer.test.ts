@@ -10,7 +10,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionRegistry } from "../sessions.ts";
 import { resolveRequestAuth, type RequestAuth } from "../request-auth.ts";
 import { json, readBody } from "../harness/http.ts";
-import { SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget, poolLocalVmTarget, type ContainerComputerStatus } from "../container-computer.ts";
+import { SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget, poolLocalVmTarget, sharedDesktopLocalVmTarget, type ContainerComputerStatus } from "../container-computer.ts";
 import { createDesktopViewer, desktopViewerUrl, type DesktopTarget } from "./desktop-viewer.ts";
 import { viewerTargetId } from "../../shared/desktop-viewer.ts";
 import { localDesktopTarget, localVmViewerStatus } from "../desktop-viewer-targets.ts";
@@ -36,7 +36,7 @@ let targetLookups: number;
 let handled: () => void;
 let leases: Set<string>;
 const leaseKey = (id: string, botId: string, lease: string) => `${id} ${botId} ${lease}`;
-let targets = [SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget("test-bot"), poolLocalVmTarget(1)];
+let targets = [SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget("test-bot"), poolLocalVmTarget(1), sharedDesktopLocalVmTarget("project-a")];
 const peers = new Set<Duplex>();
 const base = "/api/desktop-viewer/local/shared";
 const remoteHeaders = { host: "workspace.example", origin: "https://workspace.example", "x-forwarded-proto": "https" };
@@ -86,7 +86,7 @@ beforeEach(async () => {
   vpsTarget = undefined;
   targetLookups = 0; handled = () => {};
   leases = new Set();
-  targets = [SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget("test-bot"), poolLocalVmTarget(1)];
+  targets = [SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget("test-bot"), poolLocalVmTarget(1), sharedDesktopLocalVmTarget("project-a")];
   desktop = createServer((_req, res) => res.writeHead(404).end());
   desktop.on("upgrade", (req, socket) => {
     peers.add(socket);
@@ -170,7 +170,7 @@ it("protects HTTP and upgrade requests with the existing session and scope check
   expect(inspected).toEqual([]);
 });
 
-it("returns fresh credentials only to admins and selects shared, per-bot and pool targets", async () => {
+it("returns fresh credentials only to admins and selects shared, per-bot, pool and named targets", async () => {
   for (const target of targets) {
     const path = `/api/desktop-viewer/${viewerTargetId(target)}`;
     const response = await get(path);
@@ -180,8 +180,15 @@ it("returns fresh credentials only to admins and selects shared, per-bot and poo
   }
   expect(inspected).toContain(targets[1].key);
   expect(inspected).toContain("pool:1");
+  expect(inspected).toContain(sharedDesktopLocalVmTarget("project-a").key);
   expect((await open("/api/desktop-viewer/local/pool-999/websockify")).status).toBe(404);
   expect((await open("/api/desktop-viewer/local/127.0.0.1:22/websockify")).status).toBe(404);
+});
+
+it("serves a named shared desktop through the same proxy, so its panel can open it", async () => {
+  const path = `/api/desktop-viewer/${viewerTargetId(sharedDesktopLocalVmTarget("project-a"))}`;
+  expect((await get(path)).body).toEqual({ password: "fixture-secret" });
+  expect((await open(`${path}/websockify`)).status).toBe(101);
 });
 
 it.each([

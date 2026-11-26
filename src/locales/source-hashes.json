@@ -42628,6 +42628,8 @@
       "room.queue.member": "db29d8fc44e6b763583799ee7286b18341e37a6836ad3a6dedcf8f06957768eb",
       "room.responder.auto": "062ef3613e121f64b469a4dc8134061e73558df62cbb4df469c87f79bf57874e",
       "room.responder.autoOff": "7586b06e5e6eb0dcc70027e55a441fda618de9de1361d73d63a2d60c40609af0",
+      "room.responder.localAuto": "6c40fe7c16380a9b0bdd67c404cb6f7675dca1b2650ba4364d337d193ba77464",
+      "room.responder.localAutoShort": "06f5d383f9d5de3d23ca675848422a0a22c956f32dc4efa52d20da92575ccc29",
       "room.responder.autoOption": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
       "room.responder.autoOptionOff": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
       "room.responder.jevOffHint": "fa3c590446f7173f328cd2e718a006698b8abd10956f4150230fda6284297f44",
