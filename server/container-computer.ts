@@ -1,11 +1,10 @@
 // Cua-backed Local VM: OMB owns only the sandbox boundary; desktop automation is Cua Driver's (`cua-driver mcp` in the container).
-import { execFile } from "node:child_process";
+import { execFileInGroupAsync } from "./group-exec.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { promisify } from "node:util";
 
 import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
 import type { LocalVmExposure } from "./local-vm-settings.ts";
@@ -36,8 +35,10 @@ import {
   type HostUser,
 } from "./container-isolation.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
+import { runtimeHealthy } from "./container-runtime-probe.ts";
 
-const run = promisify(execFile);
+// Its own group: a timeout also ends the docker CLI plugins and credential helpers it started.
+const run = execFileInGroupAsync;
 const SCREENSHOT_STATUS_TTL_MS = 10_000;
 
 export type CommandRunner = (
@@ -284,36 +285,18 @@ export interface ContainerRuntimeStatus {
   daemonUp: boolean;
 }
 
-/** Inspects only the host runtime: never opens a container, calls Cua, or reads a screenshot. */
-export async function containerRuntimeStatus(
-  runner: CommandRunner = sh,
-  platform: NodeJS.Platform = process.platform,
-): Promise<ContainerRuntimeStatus> {
+let hostRuntimeRead: Promise<ContainerRuntimeStatus> | null = null; /** Inspects only the host runtime: never opens a container, calls Cua, or reads a screenshot. Callers at one moment share one read (the Local VM's availability and its recovery both ask at start). */
+export function containerRuntimeStatus(runner: CommandRunner = sh, platform: NodeJS.Platform = process.platform): Promise<ContainerRuntimeStatus> {
+  return runner !== sh || platform !== process.platform ? readContainerRuntimeStatus(runner, platform) : (hostRuntimeRead ??= readContainerRuntimeStatus(runner, platform).finally(() => { hostRuntimeRead = null; }));
+}
+async function readContainerRuntimeStatus(runner: CommandRunner, platform: NodeJS.Platform): Promise<ContainerRuntimeStatus> {
   // Podman is the supported Windows VM lane and owns the pinned image; Docker-first would pick an unrelated image store.
   const candidates: Runtime[] = platform === "win32"
     ? ["podman", "docker"]
     : RUNTIMES.filter((runtime) => runtime !== "container" || platform === "darwin");
   const present = await Promise.all(candidates.map((runtime) => installed(runtime, runner, platform)));
   const available = candidates.filter((_, index) => present[index]);
-  const healthy = await Promise.all(
-    available.map(async (candidate) => {
-      try {
-        const infoArgs = candidate === "container"
-          ? ["system", "status"]
-          : candidate === "podman"
-            ? ["info", "--format", "json"]
-            : ["info", "--format", "{{.ServerVersion}}"];
-        await runner(
-          candidate,
-          infoArgs,
-          10_000,
-        );
-        return true;
-      } catch {
-        return false;
-      }
-    }),
-  );
+  const healthy = await Promise.all(available.map((candidate) => runtimeHealthy(runner, candidate)));
   const healthyIndex = healthy.indexOf(true);
   return {
     runtime: healthyIndex >= 0 ? available[healthyIndex] : (available[0] ?? null),
@@ -636,7 +619,6 @@ export async function containerComputerStatus(
         detail?.Mounts,
         platform,
         target.workspaceDir,
-        status.runtime,
       ) ? "durable" : "unsafe";
       status.security = (
         status.runtime === "podman"
@@ -785,28 +767,27 @@ function sameWorkspaceSource(
   return platform === "win32" ? actual.toLowerCase() === expected.toLowerCase() : actual === expected;
 }
 
-/** Podman Machine exposes a Windows bind source through its WSL mount path; accept only the exact translation. */
-function samePodmanWindowsWorkspaceSource(source: string | undefined, expectedWorkspace: string): boolean {
+/**
+ * Podman Machine and Rancher Desktop (dockerd) expose a Windows bind source through its WSL mount path;
+ * accept only the exact translation, ignoring slash style, doubled slashes and a trailing slash.
+ */
+function sameWslWindowsWorkspaceSource(source: string | undefined, expectedWorkspace: string): boolean {
   if (!source) return false;
   const match = expectedWorkspace.match(/^([A-Za-z]):[\\/](.+)$/);
   if (!match) return false;
-  const expected = `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
-  const actual = source.replaceAll("\\", "/");
-  return actual.toLowerCase() === expected.toLowerCase();
+  const tidy = (path: string) => path.replaceAll("\\", "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
+  return tidy(source) === tidy(`/mnt/${match[1]}/${match[2]}`);
 }
 
-function dockerWorkspaceMountIsSafe(
+export function dockerWorkspaceMountIsSafe(
   mounts:
     | Array<{ Type?: string; Source?: string; Destination?: string; RW?: boolean }>
     | undefined,
   platform: NodeJS.Platform,
   expectedWorkspace: string,
-  runtime: Runtime = "docker",
 ): boolean {
   const sourceMatches = sameWorkspaceSource(mounts?.[0]?.Source, platform, expectedWorkspace) ||
-    (runtime === "podman" &&
-      platform === "win32" &&
-      samePodmanWindowsWorkspaceSource(mounts?.[0]?.Source, expectedWorkspace));
+    (platform === "win32" && sameWslWindowsWorkspaceSource(mounts?.[0]?.Source, expectedWorkspace));
   return Boolean(
     mounts?.length === 1 &&
       mounts[0]?.Type === "bind" &&
@@ -1089,7 +1070,7 @@ export async function containerComputerScreenshot(
 const screenshotStatusCache = new Map<
   string,
   { status: ContainerComputerStatus; expiresAt: number }
->();
+>(); /** The status a Local VM's last screen capture read, however old, and when: never a new one. */ export function lastLocalVmStatus(target: LocalVmTarget): { status: ContainerComputerStatus; at: number } | null { const hit = screenshotStatusCache.get(target.key); return hit ? { status: hit.status, at: hit.expiresAt - SCREENSHOT_STATUS_TTL_MS } : null; }
 
 const containerMcpPath = SPAWNED_PROXIES.containerMcp;
 
@@ -1137,7 +1118,7 @@ const defaultExecRunner: ContainerExecRunner = async (command, args, options) =>
 
 /** The limit is enforced inside the container, so a runaway process is really stopped. */
 export async function containerExec(
-  target: LocalVmTarget,
+  target: Pick<LocalVmTarget, "containerName">,
   command: string,
   options: { timeoutSeconds?: number; runtime?: Runtime; exec?: ContainerExecRunner } = {},
 ): Promise<ContainerExecResult> {

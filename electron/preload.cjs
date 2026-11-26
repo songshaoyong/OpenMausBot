@@ -50,7 +50,7 @@ ipcRenderer.on("desktop-notifications:open", (_event, target) => {
 
 // Only fixed actions are retained, never a destination supplied by a renderer.
 const FIXED_SETTINGS_ACTIONS = new Set(["organization", "cloud", "cloud-settings", "cloud-add", "cloud-add-howto",
-  "overview", "phone", "ai", "bots", "desktops", "vault", "usage", "transfer", "data", "people", "installations", "account", "plan", "app", "general", "appearance"]);
+  "overview", "devices", "phone", "ai", "bots", "desktops", "vault", "usage", "transfer", "storage", "data", "people", "installations", "account", "plan", "app", "general", "appearance", "features"]);
 let pendingSettingsAction = null;
 const appSettingsListeners = new Set();
 ipcRenderer.on("app:open-settings", (_event, section) => {
@@ -90,7 +90,7 @@ function railKeepsItsSize() {
 if (typeof window !== "undefined") {
   for (const type of ["resize", "DOMContentLoaded"]) window.addEventListener(type, () => { leaveRailRoom(); railKeepsItsSize(); });
 }
-const REMOTE_SAFE = new Set(["platform", "app", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces", "rail", "cloudAdd", "cloudPlan", "cloudSendPage", "placesTogether", "accountSheet", "desktopNotices", "desktopNotifications", "desktopAnalytics", "desktopLanguage", "updatesConsent", "windowControls", "onOpenAppSettings", "windowFrame", "softwareRendering", "appUpdate"]);
+const REMOTE_SAFE = new Set(["platform", "app", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces", "rail", "cloudAdd", "cloudPlan", "cloudSendPage", "placesTogether", "accountSheet", "desktopNotices", "desktopNotifications", "desktopAnalytics", "desktopLanguage", "updatesConsent", "windowControls", "onOpenAppSettings", "windowFrame", "softwareRendering", "appUpdate", "lendComputer"]);
 /** My Cloud's own page once it is the person's home (main checks the sender again): it is this app's page then. */
 const HOME_PAGE = ["home", "onChatLink", "onPackageInstall", "exportDiagnostics", "openLogsFolder", "openAtLogin", "callActive"];
 function updaterOffered() {
@@ -185,9 +185,14 @@ const bridge = {
     // Remove from list, for a Cloud the window's rail lists as removable, from a click on the rail's own page (main refuses any other page).
     remove: (id) => isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("workspaces:remove", String(id)) : Promise.reject(new Error("Choose Remove from list.")),
+    // Rename a server saved by hand, from a click on the rail's own page (main refuses any other page).
+    rename: (id, name) => isLocalPage || navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("workspaces:rename", String(id), String(name)) : Promise.reject(new Error("Choose Rename.")),
     // Make a server of the person's own their bots' home, from a click on the rail's own page (main refuses any other page).
     makeHome: (id) => isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("workspaces:make-home", String(id)) : Promise.reject(new Error("Choose Make my home.")),
+    // The ids of the servers main offers Make … my home for now (this computer's own page and the rail's only).
+    homeOffers: () => ipcRenderer.invoke("workspaces:home-offers"),
     onChanged: (cb) => {
       const handler = () => cb();
       ipcRenderer.on("workspaces:changed", handler);
@@ -428,6 +433,17 @@ const bridge = {
       return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
     },
   },
+  // This computer's page only: where a bot's Browser panel shows its native browser view.
+  browserPane: {
+    show: (input) => ipcRenderer.invoke("browser-pane:show", input),
+    hold: (input) => ipcRenderer.invoke("browser-pane:hold", input),
+  },
+  // This computer's page only: a site's sign-in from the person's own browsers into a bot's, which they start themselves.
+  browserCookies: {
+    sources: () => ipcRenderer.invoke("browser-cookies:sources"),
+    offer: (input) => ipcRenderer.invoke("browser-cookies:offer", input),
+    import: (input) => ipcRenderer.invoke("browser-cookies:import", input),
+  },
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
   saveFile: (filePath) => invokeWithPlainError("desktop:save-file", filePath),
@@ -436,6 +452,10 @@ const bridge = {
   openHtmlInBrowser: (source, name) => invokeWithPlainError("desktop:open-html", source, name),
   // This app's own logs folder (server.log, desktop-crashes.log, updater.log); the page names no path.
   openLogsFolder: () => ipcRenderer.invoke("desktop:open-logs"),
+  alwaysOnHome: {
+    state: () => ipcRenderer.invoke("always-on-home:state"),
+    set: on => ipcRenderer.invoke("always-on-home:set", on === true),
+  },
   openAtLogin: {
     state: () => ipcRenderer.invoke("open-at-login:state"),
     set: on => on !== true || isLocalPage || navigator.userActivation?.isActive === true
@@ -507,6 +527,7 @@ const bridge = {
     signInStart: email => ipcRenderer.invoke("cloud-account:signInStart", String(email)),
     signInVerify: code => ipcRenderer.invoke("cloud-account:signInVerify", String(code)),
     signInCancel: () => ipcRenderer.invoke("cloud-account:signInCancel"),
+    resetSaved: () => ipcRenderer.invoke("cloud-account:resetSaved"),
     reopenCheckout: (plan, source) => ipcRenderer.invoke("cloud-account:reopenCheckout", String(plan), String(source)),
     copyCheckoutLink: () => ipcRenderer.invoke("cloud-account:copyCheckoutLink"),
     interest: () => ipcRenderer.invoke("cloud-account:interest"),
@@ -566,8 +587,11 @@ const bridge = {
     // Which of this computer's bots move to My Cloud: asked on either page, and only from the person's click on My Cloud's.
     botMoveState: () => ipcRenderer.invoke("cloud-send:bot-move-state"),
     botChoices: () => ipcRenderer.invoke("cloud-send:bot-choices"),
-    moveBots: ids => isLocalPage || navigator.userActivation?.isActive === true
-      ? ipcRenderer.invoke("cloud-send:move-bots", Array.isArray(ids) ? ids.map(String) : []) : Promise.reject(new Error("Choose which bots move.")),
+    // `options`: what the move step chose to lend (main asks its own dialog before commands are lent).
+    moveBots: (ids, options) => isLocalPage || navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("cloud-send:move-bots", Array.isArray(ids) ? ids.map(String) : [], { folder: options?.folder !== false, commands: options?.commands === true })
+      : Promise.reject(new Error("Choose which bots move.")),
+    moveChanges: ids => ipcRenderer.invoke("cloud-send:move-changes", Array.isArray(ids) ? ids.map(String) : []),
     moveEverything: () => isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("cloud-send:move-everything") : Promise.reject(new Error("Choose which bots move.")),
     botMoveRetry: () => ipcRenderer.invoke("cloud-send:bot-move-retry"),
@@ -707,6 +731,16 @@ const bridge = {
     pause: () => ipcRenderer.invoke("sharing:pause"),
     resume: () => ipcRenderer.invoke("sharing:resume"),
   },
+  // The one switch for lending this computer to a server of the person's own (server-lending.mjs). On a server's own page
+  // it is about that server only (main ignores the id), and a change needs the person's own click.
+  lendComputer: {
+    state: id => ipcRenderer.invoke("lend:state", isLocalPage ? id : null),
+    set: (id, on) => isLocalPage || navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("lend:set", isLocalPage ? id : null, on === true) : Promise.reject(new Error("Use the switch to change this.")),
+    allowScreen: id => isLocalPage || navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("lend:allow-screen", isLocalPage ? id : null) : Promise.reject(new Error("Use the button to allow this.")),
+    wish: isLocalPage ? (address, on) => ipcRenderer.invoke("lend:wish", String(address ?? ""), on === true) : undefined,
+  },
   confirm: message => ipcRenderer.invoke("dialog:confirm", message),
   /** The window onto My Cloud once it is the person's home: this computer's screen while My Cloud can't be opened, and
    * on My Cloud's own page a new session when its own has ended. */
@@ -717,12 +751,16 @@ const bridge = {
       ipcRenderer.on("home:state-changed", handler);
       return () => ipcRenderer.removeListener("home:state-changed", handler);
     },
-    retry: () => ipcRenderer.invoke("home:retry"),
+    // `pressed`: Try again's own press (only this computer's screen may ask), never its looks as it opens, comes online or
+    // comes to the front.
+    retry: pressed => ipcRenderer.invoke("home:retry", pressed === true),
     remove: () => ipcRenderer.invoke("home:remove"),
     signIn: () => isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("home:sign-in") : Promise.reject(new Error("Choose Sign in to sign in again.")),
     repair: () => ipcRenderer.invoke("home:repair"),
     updating: onHomePage && reloadedForUpdate(),
+    // My Cloud's own page, while its live stream is down: what the Admin says has it down (an update, resize, move...), or null.
+    operation: onHomePage ? () => ipcRenderer.invoke("home:operation") : undefined,
   },
   updatesConsent: {
     state: () => ipcRenderer.invoke("updates-consent:state"),

@@ -4,7 +4,8 @@ import { QRCodeSVG } from "qrcode.react";
 import { t } from "@/lib/i18n";
 import { copyText, type CopyFeedback } from "@/lib/copy-text";
 import { api } from "@/state/store";
-import { isOwnerOrAdmin, readSessionState, type SessionState } from "../lib/session";
+import { isOwnerOrAdmin, type SessionState } from "../lib/session";
+import { readSharedSessionState } from "../lib/shared-session";
 import { readMembership } from "../lib/membership";
 import { codeUntil, lastSeen } from "../lib/pairing-time";
 import { revealPhonePairing, takePairOnOpen } from "../lib/phone-pairing";
@@ -36,6 +37,8 @@ export interface PairedDevice {
   lastSeenAt: number;
   expiresAt: number;
   email?: string;
+  /** The device's person, when the server knows it; the label then names the device. Absent on older servers. */
+  person?: string;
 }
 
 /**
@@ -69,7 +72,7 @@ export function sameWifiOnlyLink(url: string | null): boolean {
   }
 }
 
-/** The link another computer pastes into Connect to a server, and the address it names: the server's own link, else one made from the shared address. */
+/** The link another computer pastes into Connect to another computer, and the address it names: the server's own link, else one made from the shared address. */
 export function computerLink(offer: Pick<PairingOffer, "url" | "code">, address: string | null): { link: string; address: string } | null {
   const link = offer.url ?? (address ? `${address}/pair#code=${offer.code}` : null);
   if (!link) return null;
@@ -111,7 +114,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
   }
 
   useEffect(() => {
-    void readSessionState().then((state) => {
+    void readSharedSessionState().then((state) => {
       setSession(state);
       if (canPairDevices(state)) void loadDevices();
       if (state.kind === "loopback" || state.kind === "session") {
@@ -219,7 +222,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
               ) : null}
               {/* One 14/20 ink instruction, then 12/16 secondary notes. */}
               <div className="flex flex-col gap-1" data-pair-instructions="">
-                {forComputer ? <p className="text-[14px] leading-5 text-ink">{t("devices.computers.typeCode", { app: productName() })}</p> : offer.url ? <>
+                {forComputer ? <p className="text-[14px] leading-5 text-ink">{t("devices.computers.typeCodeOther", { app: productName() })}</p> : offer.url ? <>
                   <p className="text-[14px] leading-5 text-ink">{t("phone.code.installAndScan", { app: productName() })}</p>
                   <p className="text-[12px] leading-4 text-ink-secondary">{t("phone.code.notCamera", { app: productName() })}</p>
                 </> : <p className="text-[14px] leading-5 text-ink">{t("phone.code.typeThis", { app: productName() })}</p>}
@@ -297,11 +300,11 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
             <SettingsRows icons>
               {listed.map((device) => (
                 <div key={device.id} className="flex min-h-16 items-center gap-3 px-4 py-3" data-paired-device={device.id}>
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary"><Smartphone size={18} strokeWidth={1.75} aria-hidden="true" /></span>
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary"><Smartphone size={18} aria-hidden="true" /></span>
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate text-[14px] leading-5 text-ink">{device.label}</span>
+                    <span className="truncate text-[14px] leading-5 text-ink">{device.person ?? device.label}</span>
                     <span className="truncate text-[13px] leading-[18px] text-ink-secondary">
-                      {[device.email, cloudHome ? null : scopeName(device), t("remote.serverPairing.seen", { when: lastSeen(device.lastSeenAt, now) }), device.id === current ? t("remote.serverPairing.thisBrowser") : null].filter(Boolean).join(" · ")}
+                      {[device.person ? device.label : null, device.email === device.person ? null : device.email, cloudHome ? null : scopeName(device), t("remote.serverPairing.seen", { when: lastSeen(device.lastSeenAt, now) }), device.id === current ? t("remote.serverPairing.thisBrowser") : null].filter(Boolean).join(" · ")}
                     </span>
                   </span>
                   {device.id === current ? null : (

@@ -51,7 +51,7 @@ describe("app_settings show_card", () => {
     for (const card of ["phone-pairing", "keep-awake", "vault", "", undefined, 7, { id: "other-computers" }, "__proto__", "constructor"]) {
       const answer = await show(card);
       expect(answer.status, String(card)).toBe(404);
-      expect(String(answer.body.error)).toContain("Cards: other-computers.");
+      expect(String(answer.body.error)).toContain("Cards: other-computers, ai-sign-in.");
     }
     expect(messages).toEqual([]);
   });
@@ -62,8 +62,8 @@ describe("app_settings show_card", () => {
     expect(answer.status).toBe(200);
     expect(messages).toEqual([{ id: "m1", threadId: "t-kiwi", role: "bot", kind: "text", text: SETTINGS_CARDS["other-computers"].text, settingsCard: { id: "other-computers" } }]);
     expect(answer.body).toEqual({ text: expect.stringMatching(/^Card shown: Your other computers\. Your other computers is on now\. Only the user can change it; you cannot, and you never see what the card shows\./) });
-    expect(String(answer.body.text)).toContain("if the card shows a switch, turn it on there; otherwise open MausBot on that computer, Settings → Phone & devices");
-    expect(String(answer.body.text)).toContain("Connect to a server");
+    expect(String(answer.body.text)).toContain("if the card shows a switch, turn it on there; otherwise open MausBot on that computer, Settings → Devices");
+    expect(String(answer.body.text)).toContain("Connect to another computer");
   });
 
   it("never tells the bot the setting is off: the server knows on, or cannot tell (off, or on with nothing answering)", async () => {
@@ -73,10 +73,18 @@ describe("app_settings show_card", () => {
     expect(String((await fixture({ on: true }).show("other-computers")).body.text)).not.toContain("not known");
   });
 
+  it("AI sign-in shows on any place, says nothing about on or off, and in a room names its real place", async () => {
+    const { show, messages } = fixture({ here: true, on: null });
+    const answer = await show("ai-sign-in");
+    expect(messages).toEqual([{ id: "m1", threadId: "t-kiwi", role: "bot", kind: "text", text: SETTINGS_CARDS["ai-sign-in"].text, settingsCard: { id: "ai-sign-in" } }]);
+    expect(answer.body.text).toBe("Card shown: AI sign-in. Only the user can change it; you cannot, and you never see what the card shows. " + SETTINGS_CARDS["ai-sign-in"].guide);
+    expect(String((await fixture({ group: true }).show("ai-sign-in")).body.text)).toContain("open Settings → AI → Providers in MausBot");
+  });
+
   it("in a room, where no control is drawn, posts nothing and tells the bot where the person finds it", async () => {
     const { show, messages } = fixture({ group: true, on: true });
     const answer = await show("other-computers");
-    expect(answer).toEqual({ status: 200, body: { text: "No card shown: a settings control is not drawn in a room. Tell the user in one line to open Settings → Phone & devices → Your other computers in MausBot on the computer itself, or to ask you in your own chat, where you can show it." } });
+    expect(answer).toEqual({ status: 200, body: { text: "No card shown: a settings control is not drawn in a room. Tell the user in one line to open Settings → Devices → Private network → Your other computers in MausBot on the computer itself, or to ask you in your own chat, where you can show it." } });
     expect(messages).toEqual([]);
   });
 
@@ -102,7 +110,7 @@ describe("app_settings show_card", () => {
     for (const options of [{ here: false }, { cards: false as const }]) {
       const { show, messages } = fixture(options);
       const answer = await show("other-computers");
-      expect(answer).toEqual({ status: 200, body: { text: "No card shown: Your other computers is set in the MausBot desktop app on the computer itself, in Settings → Phone & devices. Tell the user that in one line." } });
+      expect(answer).toEqual({ status: 200, body: { text: "No card shown: Your other computers is set in the MausBot desktop app on the computer itself, in Settings → Devices → Private network. Tell the user that in one line." } });
       expect(messages).toEqual([]);
     }
   });
@@ -126,7 +134,8 @@ describe("app_settings show_card", () => {
     const { properties } = APP_SETTINGS_TOOL_DEFINITION.inputSchema;
     expect(properties.card.enum).toEqual([...SETTINGS_CARD_IDS]);
     expect(Object.keys(SETTINGS_CARDS)).toEqual([...SETTINGS_CARD_IDS]);
-    expect(properties.card.description).toBe("show_card: other-computers when the person asks how to connect or open this computer from another computer.");
+    expect(properties.card.description).toBe("show_card: other-computers when the person asks how to connect or open this computer from another computer; "
+      + "ai-sign-in when the person wants to sign in to an AI account (Claude, ChatGPT or Codex, Antigravity), or one is signed out.");
     expect(properties.action.enum).toContain("show_card");
     expect(APP_SETTINGS_TOOL_DEFINITION.description).toContain("you cannot change it or see what it shows");
   });

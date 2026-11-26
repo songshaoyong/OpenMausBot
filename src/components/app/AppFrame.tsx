@@ -35,6 +35,10 @@ export interface AppFrameProps {
   maxHeight?: number;
   /** Text the person selected in the page, in window coordinates, or null once it is gone. */
   onSelection?(selection: AppSelection | null): void;
+  /** Whether the page, as rendered, opens with a heading of its own; null while it is still drawing itself. */
+  onHeading?(heading: boolean | null): void;
+  /** Takes the page's message instead of sending it. */
+  onDraft?(text: string): void;
 }
 
 const refusal = (message: string): JsonRpcError => ({ code: RPC_HOST_REFUSED, message });
@@ -63,6 +67,7 @@ export function AppFrame(props: AppFrameProps) {
       ...(import.meta.env?.DEV ? { log: (params: unknown) => console.info("[app]", params) } : {}),
       ...(fill ? { fill: true } : {}),
       onSelection: (selection) => latest.current.onSelection?.(selection),
+      onHeading: (heading) => latest.current.onHeading?.(heading),
       adapter: {
         async callRpc(method, params) {
           const outcome = await callAppRpc({ botId, threadId, messageId, method, params });
@@ -76,6 +81,8 @@ export function AppFrame(props: AppFrameProps) {
           throw outcome.error;
         },
         async sendMessage(text) {
+          const draft = latest.current.onDraft;
+          if (draft) return draft(text);
           // A bot setting just changed is saved before the message starts a turn.
           await latest.current.flushBotPatches(botId);
           await sendAppMessage({ botId, threadId, messageId, text, sendId: newAppSendId() });

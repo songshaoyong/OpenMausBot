@@ -2,10 +2,13 @@
 // a minute on Linux from /proc (a few hundred small file reads), one every five minutes elsewhere from a single `ps`; no
 // other process, no network. The event loop is read from the sampler's own timer (how late it fired) and Node's
 // utilization counter, never a fast timer of its own. Memory: the last sample's rows and an hour of per-bucket totals.
+// A timer that fires late while the loop only waited was not held up by the server: the computer slept or the process
+// was paused, and that is told apart from a stall.
 import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 
+import { LATE_TIMER_MS, loopIdleMs, pausedNotStalled } from "./loop-pause.ts";
 import { exactQuantile } from "./phases.ts";
 import {
   classifyProcesses, parseCgroupCpuMs, parseProcStat, parsePsLine, parseReapedChildrenMs, type ProcessBucket, type ProcessRow,
@@ -15,6 +18,7 @@ export const LINUX_SAMPLE_MS = 60_000;
 export const OTHER_SAMPLE_MS = 5 * 60_000;
 const HOUR = 3_600_000, FIVE_MINUTES = 5 * 60_000;
 const BUCKETS_SHOWN = 12;
+export { LATE_TIMER_MS, pausedNotStalled };
 
 export interface ProcessList {
   rows: ProcessRow[];
@@ -42,12 +46,16 @@ export interface ProcessReport {
 
 const readText = (path: string): string | null => { try { return readFileSync(path, "utf8"); } catch { return null; } };
 
-/** Every process /proc shows, read synchronously: one stat file each. */
+/** A sample reads at most this many processes: a container holds a few thousand at its limit, a shared host may show more. */
+export const MAX_SAMPLED_PROCESSES = 8_192;
+
+/** Every process /proc shows, up to MAX_SAMPLED_PROCESSES, read synchronously: one stat file each. */
 export function linuxProcessList(read: (path: string) => string | null = readText, list: () => string[] = () => readdirSync("/proc")): ProcessList {
   const rows: ProcessRow[] = [];
   let names: string[] = [];
   try { names = list(); } catch {}
   for (const name of names) {
+    if (rows.length >= MAX_SAMPLED_PROCESSES) break;
     if (!/^\d+$/.test(name)) continue;
     const text = read(`/proc/${name}/stat`);
     const row = text === null ? null : parseProcStat(Number(name), text);
@@ -60,7 +68,7 @@ export function linuxProcessList(read: (path: string) => string | null = readTex
 /** One `ps` over every process: the fallback where there is no /proc (macOS). */
 export function psProcessList(): Promise<ProcessList | null> {
   return new Promise((resolve) => {
-    execFile("ps", ["-axo", "pid=,ppid=,rss=,time=,comm="], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
+    execFile("ps", ["-axo", "pid=,ppid=,pgid=,rss=,time=,comm="], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
       if (error) return resolve(null);
       const rows = stdout.split("\n").flatMap((line) => { const row = parsePsLine(line); return row ? [row] : []; });
       resolve({ rows, reapedMs: null, totalMs: null });
@@ -77,12 +85,18 @@ export interface ProcessSamplerOptions {
   monotonic?: () => number;
   /** Node's event-loop utilization since the previous call, 0–1; null where not available. */
   utilization?: () => number | null;
-  /** The sampler's timer fired this much later than it was due. */
+  /** The event loop's time spent waiting so far, ms; null where not available. Node's own counter unless `monotonic` is given. */
+  idle?: () => number | null;
+  /** The sampler's timer fired this much later than it was due, with the loop at work. */
   stalled?: (driftMs: number) => void;
+  /** The timer fired this much late with the loop waiting throughout: the computer slept or the process was paused. */
+  resumed?: (gapMs: number) => void;
   /** The engine processes the server started, by pid, with their engine kinds. */
   engines?: () => ReadonlyMap<number, string>;
   /** After each timed sample: other once-a-sample checks ride the same timer. */
   afterSample?: () => void;
+  /** Each sample's rows with their buckets, before the rows are dropped. */
+  seen?: (rows: readonly ProcessRow[], buckets: ReadonlyMap<number, ProcessBucket>) => void;
 }
 
 export function nodeUtilization(): () => number | null {
@@ -98,14 +112,16 @@ export function nodeUtilization(): () => number | null {
 export function createProcessSampler(options: ProcessSamplerOptions) {
   const now = options.now ?? Date.now, monotonic = options.monotonic ?? (() => performance.now());
   const serverPid = options.serverPid ?? process.pid;
+  const idle = options.idle ?? (options.monotonic ? () => null : loopIdleMs);
   const samples: Sample[] = [];
   let previous: { at: number; rows: Map<number, { start: string; cpuMs: number; bucket: ProcessBucket; ppid: number }>; reapedMs: number | null; totalMs: number | null } | null = null;
   let latest: { at: number; procs: Partial<Record<ProcessBucket, number>>; rss: Partial<Record<ProcessBucket, number>>; browsers: number } | null = null;
-  let timer: ReturnType<typeof setTimeout> | null = null, due = 0, running = false;
+  let timer: ReturnType<typeof setTimeout> | null = null, due = 0, idleAtSchedule: number | null = null, running = false;
 
   const take = (list: ProcessList, driftMs: number) => {
     const at = monotonic();
     const buckets = classifyProcesses(list.rows, serverPid, options.scope === "tree", options.engines?.());
+    try { options.seen?.(list.rows, buckets); } catch {}
     const cpu: Partial<Record<ProcessBucket, number>> = {}, procs: Partial<Record<ProcessBucket, number>> = {}, rss: Partial<Record<ProcessBucket, number>> = {};
     const rows = new Map<number, { start: string; cpuMs: number; bucket: ProcessBucket; ppid: number }>();
     let browsers = 0;
@@ -136,14 +152,18 @@ export function createProcessSampler(options: ProcessSamplerOptions) {
   };
 
   const tick = async () => {
-    const driftMs = Math.max(0, monotonic() - due);
-    if (driftMs >= 2_000) options.stalled?.(Math.round(driftMs));
-    await sampleNow(driftMs);
+    const lateMs = Math.max(0, monotonic() - due);
+    const idleNow = idle();
+    const paused = pausedNotStalled(options.intervalMs, lateMs, idleNow === null || idleAtSchedule === null ? null : idleNow - idleAtSchedule);
+    if (paused) options.resumed?.(Math.round(lateMs));
+    else if (lateMs >= LATE_TIMER_MS) options.stalled?.(Math.round(lateMs));
+    await sampleNow(paused ? 0 : lateMs);
     try { options.afterSample?.(); } catch {}
     schedule();
   };
   const schedule = () => {
     due = monotonic() + options.intervalMs;
+    idleAtSchedule = idle();
     timer = setTimeout(() => void tick(), options.intervalMs);
     timer.unref?.();
   };

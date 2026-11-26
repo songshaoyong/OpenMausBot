@@ -6,12 +6,13 @@ import { IMAGE_TOOL_NAMES } from "./agents-image-tools.ts";
 import { MEETING_TOOL_NAMES } from "./agents-meeting-tools.ts";
 import { PAGE_TOOL_NAMES } from "./agents-pages-tools.ts";
 import { RESEARCH_TOOL_NAMES } from "./agents-research-tools.ts";
+import { SHARE_TOOL_NAMES } from "./agents-share-tool.ts";
 
 /** Each group's tools on the agents server, and the whole MCP servers (turn integrations) it stands for. */
 export const TOOL_GROUP_MEMBERS: Readonly<Record<ToolGroup, { tools: ReadonlySet<string>; servers: readonly ("data" | "email")[] }>> = {
   meetings: { tools: MEETING_TOOL_NAMES, servers: [] },
   data: { tools: new Set(), servers: ["data"] },
-  pages: { tools: new Set(["show_html", ...PAGE_TOOL_NAMES, ...HOSTING_TOOL_NAMES]), servers: [] },
+  pages: { tools: new Set(["show_html", ...PAGE_TOOL_NAMES, ...HOSTING_TOOL_NAMES, ...SHARE_TOOL_NAMES]), servers: [] },
   images: { tools: IMAGE_TOOL_NAMES, servers: [] },
   email: { tools: new Set(), servers: ["email"] },
 };
@@ -27,12 +28,12 @@ export const OWN_SWITCH_TOOLS: Readonly<Record<"memory" | "research", ReadonlySe
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
   "tool_result_read", "list_shared_computers", "shared_computer", "ask_for_computer", "list_room_targets", "coordinate_bots",
   "assignment_status", "list_bots", "usage_limits", "list_rooms", "select_computer", "reset_cloud_computer", "list_threads",
-  "close_thread", "rename_thread", "start_thread", "burst", "list_models", "vm_exec", "attach_file", "show_widget", "create_options_card",
+  "close_thread", "rename_thread", "set_main_thread", "start_thread", "burst", "list_models", "vm_exec", "attach_file", "show_widget", "create_options_card",
   "post_to_room", "post_to_thread", "create_bot", "list_team_setup", "list_team_library", "propose_team_setup",
   "propose_bot_deletion", "manage_room", "request_credential", "request_sign_in", "fill_login", "send_voice_note", "decide",
-  "extract", "message_person", "report_bug", "retry_thread", "session_search", "trigger_info", "trigger", "delete_trigger",
-  "wait_until", "list_waits", "cancel_wait", "propose_profile", "propose_model", "propose_team_memory", "skills_list",
-  "skill_manage", "mcp_server", "app_settings", "list_unread_notifications", "mark_notifications_read",
+  "extract", "what_changed", "message_person", "report_bug", "retry_thread", "session_search", "trigger_info", "trigger", "delete_trigger",
+  "wait_until", "list_waits", "cancel_wait", "check_back", "board_add", "board_list", "board_update", "propose_profile", "propose_model", "propose_team_memory", "skills_list",
+  "skill_manage", "run_workflow", "workflow_edit", "mcp_server", "app_settings", "list_unread_notifications", "mark_notifications_read",
 ]);
 
 /** The agents tools the groups in `off` leave out. */

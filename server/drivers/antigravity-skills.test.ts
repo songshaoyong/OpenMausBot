@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -63,6 +63,34 @@ describe("Antigravity skill staging", () => {
     const other = fixture("root-link");
     symlinkSync(outside, join(other.cwd, "omb-skills"), process.platform === "win32" ? "junction" : "dir");
     expect(() => stageAntigravitySkills({ ...turn, text: "Read " + JSON.stringify(other.file), skillFiles: [other.file] }, other.cwd)).toThrow("staging path");
+  });
+
+  it("skips caches and hidden files in a skill folder instead of refusing the skill", () => {
+    const { source, cwd, file } = fixture("caches");
+    writeFileSync(join(source, ".DS_Store"), "Finder");
+    mkdirSync(join(source, "references", "__pycache__"));
+    writeFileSync(join(source, "references", "__pycache__", "guide.cpython-312.pyc"), "bytecode");
+    mkdirSync(join(source, "node_modules", "x"), { recursive: true });
+    writeFileSync(join(source, "node_modules", "x", "index.js"), "module.exports = 1;");
+    const turn = { threadId: "thread", text: "Read " + JSON.stringify(file), skillFiles: [file] };
+    const staged = stageAntigravitySkills(turn, cwd);
+    const folder = join(JSON.parse(staged.text.slice(5)) as string, "..");
+    expect(readdirSync(folder).sort()).toEqual(["SKILL.md", "references"]);
+    expect(readdirSync(join(folder, "references"))).toEqual(["guide.md"]);
+    expect(stageAntigravitySkills(turn, cwd).text).toBe(staged.text);
+
+    mkdirSync(join(folder, "references", "__pycache__"));
+    writeFileSync(join(folder, "references", "__pycache__", "guide.pyc"), "bytecode");
+    mkdirSync(join(folder, "node_modules", "x"), { recursive: true });
+    writeFileSync(join(folder, "node_modules", "x", "index.js"), "module.exports = 1;");
+    writeFileSync(join(folder, ".DS_Store"), "Finder");
+    const again = stageAntigravitySkills(turn, cwd);
+    expect(again.skillFiles).toEqual(staged.skillFiles);
+    expect(again.text).toBe(staged.text);
+    if (process.platform !== "win32") {
+      chmodSync(join(folder, "SKILL.md"), 0o700);
+      expect(() => stageAntigravitySkills(turn, cwd)).toThrow("Antigravity staged skill files changed.");
+    }
   });
 
   it("never stages through a task directory link", () => {

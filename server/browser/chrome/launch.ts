@@ -6,6 +6,7 @@ import { pipeTransport, type CdpTransport } from "../cdp/transport.ts";
 import { chromeArgs, chromeEnv, type ChromeEnvInput, type ChromeFlagsInput } from "./flags.ts";
 import { diagnoseLaunchFailure, type BrowserHostError } from "./host-setup.ts";
 import type { ProcessRegistry } from "./processes.ts";
+import { devShmIsSmall } from "./shm.ts";
 
 export interface LaunchOptions extends ChromeFlagsInput, Omit<ChromeEnvInput, "host"> {
   /** A resolved Chrome or Chrome for Testing executable. */
@@ -14,6 +15,8 @@ export interface LaunchOptions extends ChromeFlagsInput, Omit<ChromeEnvInput, "h
   /** A first launch on a fresh machine can take half a minute (font caches, a virus scan of the binary). */
   handshakeTimeoutMs?: number;
   registry?: ProcessRegistry | null;
+  /** A command Chrome starts under, its own command line following, such as a private mount namespace. */
+  wrap?: { command: string; args: readonly string[] } | null;
 }
 
 export interface BrowserVersion {
@@ -98,14 +101,15 @@ function handshake(transport: CdpTransport, exited: Promise<ChromeExit>, timeout
 
 /** Starts Chrome on --remote-debugging-pipe (fd 3 to Chrome, fd 4 back) and waits until it answers. */
 export async function launchChrome(options: LaunchOptions): Promise<ChromeProcess> {
-  const argv = chromeArgs(options);
+  const argv = chromeArgs({ ...options, smallShm: options.smallShm ?? devShmIsSmall() });
   const env = chromeEnv(options.env ?? process.env, {
     host: options.host,
     timezone: options.timezone ?? null,
     sandboxHelper: options.sandboxHelper ?? null,
     profileMarker: options.profileMarker ?? null,
   });
-  const child = spawnBotWork(() => spawn(options.executablePath, argv, { stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"], env, windowsHide: true }));
+  const [command, args] = options.wrap ? [options.wrap.command, [...options.wrap.args, options.executablePath, ...argv]] : [options.executablePath, argv];
+  const child = spawnBotWork(() => spawn(command, args, { stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"], env, windowsHide: true }));
   let output = "";
   const keep = (chunk: Buffer) => {
     output = (output + chunk.toString("utf8")).slice(-OUTPUT_LIMIT);

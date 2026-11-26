@@ -16,6 +16,8 @@ import {
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import type { ProviderInstance, SteerOutcome } from "../contracts.ts";
 import { cancelledChatFollowup } from "../message-db.ts";
+import { roomThreadSummaries } from "../message-db-thread-summaries.ts";
+import type { RoomThreadSummariesResponse } from "../../shared/room-threads.ts";
 import { messageTextRefusal } from "../message-text.ts";
 import { prepareRoomPointed, roomPickBots, type RoomPick } from "../room-pointed.ts";
 import { refusalBody } from "../user-errors.ts";
@@ -28,15 +30,16 @@ import type { RoutineManager } from "../routines.ts";
 import { acceptedSendMatch, parseSendId, parseStopId, sendFingerprint, StopReceipts, type SendSequencer } from "../send-idempotency.ts";
 import type { SkillReview } from "../skill-review.ts";
 import { assertWithinBudget } from "../spend.ts";
-import type { BotRecord, GroupRecord, GroupTaskPatch, Message, Store } from "../store.ts";
+import { mentionedBots, type BotRecord, type GroupRecord, type GroupTaskPatch, type Message, type Store } from "../store.ts";
+import { roomLeadId, steerMeantForSpeaker } from "../room-steer-addressee.ts";
 import type { ThreadStarters } from "../thread-starters.ts";
 import { extractSteerImages } from "../turn-images.ts";
 import type { UsageTrigger } from "../usage-ledger.ts";
 import { parseMentionPicks } from "../../shared/room-mentions.ts";
 import { sameNameRefusal, sameNameRefusalForBots } from "../same-name-mentions.ts";
 import { conversationLanguage } from "../server-lines.ts";
-import { bulkDeleteThreadIds, type BulkDeleteRefusal } from "./bulk-delete.ts";
-import { forkMessageId } from "./fork-request.ts";
+import { bulkDeleteThreadIds, outsideClosedScope, type BulkDeleteRefusal } from "./bulk-delete.ts";
+import { FORK_BUSY, FORK_NO_TEXT, parseForkRequest } from "./fork-request.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 import { sawThread } from "../thread-presence.ts";
 import { readThreadNotifications, type NotificationListed } from "./notifications.ts";
@@ -83,6 +86,8 @@ export interface ChannelRouteDeps {
   personMarkRoom?(auth: RequestAuth, room: GroupRecord, unread: boolean, threadId?: string): WireGroup | null;
   /** A room as this person has read it (a Team Cloud); the room itself anywhere else. */
   groupFor?(auth: RequestAuth, group: WireGroup): WireGroup;
+  /** Whether this person may read the conversation; a room's threads all show where nobody's reading is narrowed. */
+  threadShown?(auth: RequestAuth, threadId: string): boolean;
   pageSize(raw: string | null): number | null | undefined;
   messagePage(threadId: string, limit: number | undefined): MessagePage;
   resolveReplyTarget(threadId: string, value: unknown): Message | undefined;
@@ -98,7 +103,14 @@ export interface ChannelRouteDeps {
     options: { via?: "api"; sender?: ResolvedSender; trigger?: UsageTrigger; threadId?: string; mentions?: string[]; pointed?: RoomPick },
   ): Message;
   applyRoomHoldsFromMessage(groupId: string, text: string, mentions?: readonly string[]): void;
+  /** A person's chat line in a thread whose board item waits on a person: the line addressed to the bot that asked, and
+   * the move that takes the item back to work once it is sent. Null for every other thread (board/wiring.ts). */
+  boardReply?(groupId: string, threadId: string, text: string): { text: string; botId: string; resume(): void } | null;
+  /** What a resent line may have been saved as by `boardReply`. */
+  boardAddressed?(groupId: string, threadId: string, text: string): string | null;
   cancelGroupTurnOperations(groupId: string, threadId: string): void;
+  /** Whether this bot's live turn in the thread is a job another bot handed it. */
+  speakerOnHandedWork(threadId: string, botId: string): boolean;
   drainQueuedChannelSends(): void;
   clearTurnDigestState(threadId: string): void;
   closeOpenApprovals(threadId: string): void;
@@ -107,7 +119,9 @@ export interface ChannelRouteDeps {
   rejectDeletedThreadSkillStages(cleanups: Array<{ botId: string; stagedId: string }>): void;
 }
 
-const createGroupTaskRequestSchema = z.object({ title: z.string().optional() });
+const createGroupTaskRequestSchema = z.object({ title: z.string().optional(), activate: z.boolean().optional() });
+/** The most threads one read request may name. */
+const MAX_READ_THREADS = 500;
 
 type StopAnswer = { status: 200 | 403 | 409; body: { ok: true } | { error: string; code?: "stop_not_yours" } };
 
@@ -118,7 +132,7 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
     groupWithThread, updateChannel, groupIsWorking, groupThreadIsWorking, readCursor, pageSize, messagePage,
     resolveReplyTarget, runningTurnInstance, startGroupTurn, engineSteersImages, applyRoomHoldsFromMessage, cancelGroupTurnOperations,
     drainQueuedChannelSends, clearTurnDigestState, closeOpenApprovals, revokeInternalCapabilitiesForThread,
-    stagedSkillCleanupsForThread, rejectDeletedThreadSkillStages,
+    stagedSkillCleanupsForThread, rejectDeletedThreadSkillStages, speakerOnHandedWork,
   } = deps; const owners = routeRunOwners(deps.runOwners, deps.runActor);
   const DESKTOP_MANAGED = deps.desktopManaged;
   const roomStops = new StopReceipts<StopAnswer>();
@@ -152,14 +166,13 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
     if (m && method === "POST") {
       const group = store.group(m[1]);
       if (!group || group.dm || !store.groupTaskByThread(group.id, m[2])) return json(res, 404, { error: "no such conversation" });
-      const body = await readBody(req);
-      const messageId = forkMessageId(body);
-      if (messageId === null) return json(res, 400, { error: "messageId must be a string" });
+      const fork = parseForkRequest(await readBody(req));
+      if (!fork) return json(res, 400, { error: "Provide a string messageId or set latest to true" });
       const notYours = cloudThreadRefusal(auth, m[2]);
       if (notYours) return json(res, 403, { error: notYours });
-      if (groupThreadIsWorking(group.id, m[2])) return json(res, 409, { error: "this conversation is running — wait for it to finish" });
-      const task = store.forkGroupTask(group.id, m[2], messageId);
-      if (!task) return json(res, 404, { error: "no such completed message in this conversation" });
+      if (groupThreadIsWorking(group.id, m[2])) return json(res, 409, FORK_BUSY);
+      const task = store.forkGroupTask(group.id, m[2], fork.messageId);
+      if (!task) return json(res, 404, fork.messageId === undefined ? FORK_NO_TEXT : { error: "no such completed message in this conversation" });
       if (auth.kind === "session") threadStarters.set(task.threadId, actorKey(auth));
       return json(res, 201, { group: own(groupWithThread(store.group(group.id)!)), task } satisfies RoomTaskCreateResponse);
     }
@@ -178,11 +191,21 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
       }
       const request = createGroupTaskRequestSchema.safeParse(body);
       if (!request.success) return json(res, 400, { error: "title must be text" });
-      const task = store.createGroupTask(group.id, request.data.title);
+      const task = store.createGroupTask(group.id, request.data.title, request.data.activate !== false);
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       // Who opened it decides who may answer its cards on a shared workspace.
       if (auth.kind === "session") threadStarters.set(task.threadId, actorKey(auth));
       return json(res, 201, { group: own(groupWithThread(store.group(group.id)!)), task } satisfies RoomTaskCreateResponse);
+    }
+
+    m = path.match(/^\/api\/groups\/([\w-]+)\/threads\/summary$/);
+    if (m && method === "GET") {
+      const group = store.group(m[1]);
+      if (!group || group.dm) return json(res, 404, { error: "no such room" });
+      const archived = url.searchParams.get("archived") === "1";
+      const threadIds = (group.tasks ?? [{ threadId: group.threadId, archivedAt: undefined }]).filter((task) => (archived || task.archivedAt === undefined) && (deps.threadShown?.(auth, task.threadId) ?? true))
+        .map((task) => task.threadId);
+      return json(res, 200, { threads: roomThreadSummaries(threadIds) } satisfies RoomThreadSummariesResponse);
     }
 
     m = path.match(/^\/api\/groups\/([\w-]+)\/tasks\/delete$/);
@@ -196,8 +219,9 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
       const refused: BulkDeleteRefusal[] = [];
       for (const threadId of parsed.threadIds) {
         const refusal = deleteRefusal(auth, group.id, threadId);
-        if (!refusal) allowed.push(threadId);
-        else refused.push({ threadId, reason: refusal.status === 409 ? "busy" : "not-found" });
+        if (refusal) refused.push({ threadId, reason: refusal.status === 409 ? "busy" : "not-found" });
+        else if (parsed.scope === "closed" && outsideClosedScope(store.groupTaskByThread(group.id, threadId))) refused.push({ threadId, reason: "not-closed" });
+        else allowed.push(threadId);
       }
       if (allowed.length >= (group.tasks?.length ?? 1)) return json(res, 400, { error: "a channel keeps at least one task" });
       const result = deleteGroupTasks(group.id, allowed);
@@ -308,6 +332,25 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
       const room = store.group(m[1]);
       if (!room) return json(res, 404, { error: "no such room" });
       const body = await readBody(req);
+      // Several of the room's threads in one request and one frame: the feed reads marks older than itself this way.
+      if (Array.isArray(body?.threadIds)) {
+        const asked: unknown[] = body.threadIds;
+        if (room.dm || asked.length > MAX_READ_THREADS || asked.some((id) => typeof id !== "string")) return json(res, 400, { error: "threadIds must be up to 500 of the room's threads" });
+        const threadIds = [...new Set(asked as string[])].filter((id) => store.groupTaskByThread(room.id, id));
+        let personal: WireGroup | null = null;
+        let shared: GroupRecord | null = null;
+        for (const id of threadIds) {
+          sawThread(id);
+          deps.threadRead?.(auth, id);
+          personal = deps.personMarkRoom?.(auth, room, false, id) ?? null;
+          if (!personal) shared = store.markGroupThreadUnread(room.id, id, false, readCursor(id).lastReadMessageId);
+          readThreadNotifications(id, broadcast, notificationListed(auth));
+        }
+        if (personal) return json(res, 200, { group: personal, read: threadIds.length });
+        const group = shared ?? store.group(room.id)!;
+        if (shared) broadcast({ kind: "group", group: publicGroupState(group) });
+        return json(res, 200, { group: own(publicGroupState(group)), read: threadIds.length });
+      }
       const threadId = body?.threadId ?? room.threadId;
       if (typeof threadId !== "string" || (room.dm
         ? threadId !== room.threadId
@@ -411,7 +454,9 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
             if (cancelledChatFollowup("channel", group.id, threadId, sendId)) {
               throw Object.assign(new Error("this queued sendId was cancelled; send a new message to try again"), { status: 409 });
             }
-            const accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id, channelMode);
+            let accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id, channelMode);
+            const addressed = accepted.kind === "conflict" ? deps.boardAddressed?.(group.id, threadId, text) : null;
+            if (addressed) accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, addressed, replyTo?.id, channelMode);
             if (accepted.kind === "conflict") {
               throw Object.assign(new Error("sendId already belongs to another message"), { status: 409 });
             }
@@ -421,7 +466,7 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
             const queued = queuedChannelMessage(group.id, threadId, sendId);
             if (queued) {
               if (
-                queued.text !== text ||
+                (queued.text !== text && queued.text !== deps.boardAddressed?.(group.id, threadId, text)) ||
                 queued.replyToId !== replyTo?.id ||
                 queued.mode !== channelMode
               ) {
@@ -453,22 +498,26 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
             : sameNameRefusal(text, members, mentions, conversationLanguage(threadId));
           if (sameName) throw Object.assign(new Error(sameName), { status: 409 });
           if (channelMode === "chat" && !owners.stopRefusal(auth, threadId)) applyRoomHoldsFromMessage(current.id, text, mentions);
+          const board = channelMode === "chat" && !via && (trigger.kind === "user" || trigger.kind === "owner") ? deps.boardReply?.(current.id, threadId, text) ?? null : null;
+          const lineText = board?.text ?? text, lineMentions = board ? [...new Set([...(mentions ?? []), board.botId])] : mentions;
           const threadWorking = groupThreadIsWorking(current.id, threadId);
           const decision = admit("room", {}, { roomWorking: threadWorking, threadWorking });
           if (decision.action === "queue") {
-            const queued = queueChannelMessage(current.id, threadId, text, {
+            const queued = queueChannelMessage(current.id, threadId, lineText, {
               replyToId: replyTo?.id,
               sendId,
               mode: channelMode,
               via,
               sender: messageSender(auth),
               trigger,
-              mentions,
+              mentions: lineMentions,
               ...(pick ? { pointed: pick } : {}),
             });
+            board?.resume();
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
-          const message = startGroupTurn(current.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth), trigger, threadId, mentions, ...(pick ? { pointed: pick } : {}) });
+          const message = startGroupTurn(current.id, lineText, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth), trigger, threadId, mentions: lineMentions, ...(pick ? { pointed: pick } : {}) });
+          board?.resume();
           return { ok: true as const, threadId, message };
         },
       );
@@ -525,8 +574,16 @@ export function createChannelRoutes(deps: ChannelRouteDeps): RouteHandler {
         return json(res, 403, { error: waitsItsTurn, code: "waits_its_turn" });
       }
       const steerInput = extractSteerImages(headGroup.map((item) => item.text));
+      const members = current.memberIds.map((id) => store.bot(id)).filter((bot): bot is BotRecord => Boolean(bot));
+      const mentioned = [...new Set(headGroup.flatMap((item) => mentionedBots(item.text, members, item.mentions ?? []).map((bot) => bot.id)))];
       const decision = admit("room-steer", {
         speakerPresent: Boolean(speaker),
+        speakerAddressed: !speaker || steerMeantForSpeaker({
+          speakerId: speaker.id,
+          mentioned,
+          leadId: roomLeadId(current.defaultResponder),
+          speakerOnHandedWork: speakerOnHandedWork(targetThreadId, speaker.id),
+        }),
         engineCanSteer: Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer),
         carriesImages: !steerInput || steerInput.images.length > 0,
         engineCanSteerImages: Boolean(steerInput) && engineSteersImages(instance),

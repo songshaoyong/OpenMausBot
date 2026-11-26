@@ -14,7 +14,9 @@ import { buyOfferAllowed, cloudNoticeKind, cloudPlanView, cloudTrialNotice, clou
 import { jobRoutine, useCloudIntent } from "@/lib/cloud-intent";
 import { CLOUD_INTENT_GIVEN, cloudSetupStage } from "@/lib/cloud-setup";
 import { cornerPopupWaits, firstChatQuiet, firstReplyPending } from "@/lib/corner-popup";
-import { ANNOUNCEMENT_NOTICE, BOAT_OFFER_NOTICE, CLOUD_INTRO, CLOUD_NOTICE, CLOUD_TRIAL_NOTICE, dismissNotice, dismissNotices, GROK_MOVE_NOTICE, introShown, introStage, launchNotice, markLaunchNotice, MODELGO_OFFER_NOTICE, nextNotice, noticeSeen, PHONE_UPDATE_NOTICE, phoneUpdateHint, PRODUCT_HUNT_NOTICE, PRODUCT_HUNT_UNTIL, PRODUCT_HUNT_URL, SIMPLE_MODE_NOTICE, STAR_NOTICE, TWO_PLACES_NOTICE, UPDATES_CONSENT_NOTICE, usedBefore, WHATS_NEW_NOTICE } from "@/lib/notices";
+import { ANNOUNCEMENT_NOTICE, BOAT_OFFER_NOTICE, CLOUD_INTRO, CLOUD_NOTICE, CLOUD_TRIAL_NOTICE, dismissNotice, dismissNotices, GROK_MOVE_NOTICE, introShown, introStage, launchNotice, markLaunchNotice, MODELGO_OFFER_NOTICE, nextNotice, noticeSeen, PHONE_UPDATE_NOTICE, phoneUpdateHint, PRODUCT_HUNT_NOTICE, PRODUCT_HUNT_UNTIL, PRODUCT_HUNT_URL, SIMPLE_MODE_NOTICE, STAR_NOTICE, TEAMS_NOTICE, TWO_PLACES_NOTICE, UPDATES_CONSENT_NOTICE, usedBefore, WHATS_NEW_NOTICE } from "@/lib/notices";
+import { rememberNoticeSeen } from "@/lib/announcement-history";
+import { reportTeams, teamsAction } from "@/lib/teams-whats-new";
 import { useTwoPlaces } from "@/lib/two-places";
 import { SIMPLE_ONLY } from "@/lib/simple-only";
 import { useAdvancedBackDue, useNewLookDue } from "@/lib/new-look";
@@ -32,6 +34,7 @@ import { engineReady } from "./EngineLibrary";
 import { ModelgoOfferCard, type ModelgoCardAction } from "./ModelgoOffer";
 import { CLOUD_NOTICE_CARD, cloudNoticeStep, CloudNoticeCard } from "./CloudNotice";
 import { CloudTrialIntroCard } from "./CloudTrialIntro";
+import { hasBotsHere } from "@/lib/move-changes";
 import { useMoveQuiet } from "./CloudSendStrip";
 import { CloudTrialNoticeCard, useCloudPlanSnapshot } from "./CloudTrialNotice";
 import { GrokMovePopup, reportGrokMovePopup, type GrokMovePopupAction } from "./GrokMovePopup";
@@ -45,6 +48,7 @@ import { NewLookNotice, reportNewLook } from "./NewLookNotice";
 import { PhoneUpdateCard, phonesToTell, useRetiredLinkPhones } from "./PhoneUpdateNotice";
 import { reportSimpleModePrompt, SimpleModePrompt } from "./SimpleModePrompt";
 import { TwoPlacesCard } from "./TwoPlacesCard";
+import { TeamsPopup } from "./whats-new/TeamsPopup";
 import { WhatsNewPopup } from "./whats-new/WhatsNewPopup";
 
 function StarCard({ onDismiss }: { onDismiss: () => void }) {
@@ -209,12 +213,13 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
   }, [grokDue, grokLanding, waits]);
   const grokNow = !grokDue ? false
     : !viewer || (desktop && !desktopState) || organization === null || firstChat === null || mausBotFirst || moving === null || grokLanding || grokBlocked ? null : true;
-  // Everyone, whether or not a bot has answered yet (so not `afterWelcome`, which holds until one has), but never in the launch
-  // the welcome or MausBot's card took, or during a live call.
-  const modelgoNow = !modelgoHere || moving || welcomeFinishedThisLaunch() || launchDialogShown() === "mausbot" || desktopState?.seen.includes(MODELGO_OFFER_NOTICE) ? false
-    : organization === null || moving === null || firstChat === null || mausBotFirst || (state.liveCall && state.liveCall.status !== "ended") || (desktop && !desktopState) ? null : true;
-  // A card from the project's announcements file: the built-in sponsor card's exclusions, and src/lib/announcements.ts's rules for
-  // which card and for whom (once per person, one sponsor card a week, none on a branded build).
+  // Everyone, whether or not a bot has answered yet (so not `afterWelcome`), never during a live call; in the launch a new
+  // install's welcome finished, only once its first chat has had a reply. It follows MausBot's card once that closes.
+  const modelgoNow = !modelgoHere || moving || desktopState?.seen.includes(MODELGO_OFFER_NOTICE) ? false
+    : organization === null || moving === null || firstChat === null || (welcomeFinishedThisLaunch() && firstChat) || mausBotFirst || (state.liveCall && state.liveCall.status !== "ended") || (desktop && !desktopState) ? null : true;
+  // A card from the project's announcements file: never in the launch a welcome or MausBot's card took, else the built-in
+  // sponsor card's exclusions, and src/lib/announcements.ts's rules for which card and for whom (once per person, one
+  // sponsor card a week, none on a branded build).
   const branded = brandStatus().source === "file", team = Boolean(state.config?.team);
   const remoteCards = useAnnouncementCards(!branded);
   const surface = announcementSurface(local, Boolean(state.config?.cloudHome || viewer?.cloudHome));
@@ -226,6 +231,14 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
     sponsors: !providersRestricted(state.config?.managedPolicy) && sponsorsHere,
   });
   const announcement = picked && picked !== "wait" ? picked : null;
+  // Teams: everyone once, ahead of every other notice, on every page but a branded build's or an organization's desktop;
+  // as the What's new popup, never in the launch a welcome or MausBot's card took, before a first reply, over a first
+  // run's own screens or another dialog, during a live call or a move.
+  const teamsSeen = noticeSeen(record, TEAMS_NOTICE) || Boolean(desktopState?.seen.includes(TEAMS_NOTICE));
+  const teamsHere = !branded && organization !== true && !teamsSeen;
+  const teamsBlocked = useOtherDialogOpen(teamsHere, true) || Boolean(state.liveCall && state.liveCall.status !== "ended");
+  const teamsNow = !teamsHere || moving || afterWelcome === true ? false
+    : organization === null || !viewer || (desktop && !desktopState) || afterWelcome === null || mausBotFirst || moving === null || teamsBlocked ? null : true;
   const announcementNow = !picked || moving || welcomeFinishedThisLaunch() || launchDialogShown() === "mausbot" ? false
     : picked === "wait" || !viewer || organization === null || moving === null || firstChat === null || mausBotFirst || (state.liveCall && state.liveCall.status !== "ended") || (desktop && !desktopState) ? null : true;
   const remembering = { desktop, liveIds: new Set(remoteCards.map(card => card.id)), save: (hintsSeen: string[]) => void api("/api/config", { method: "PUT", body: JSON.stringify({ onboarding: { hintsSeen } }) })
@@ -238,7 +251,8 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
   // FOLLOWERS); nothing else does.
   const notice = waits ? null
     : firstChatQuiet(state) ? (grokNow === true && (launch === null || launch === GROK_MOVE_NOTICE) ? GROK_MOVE_NOTICE : null)
-    : cards || whatsNewHere || consentHere || simpleDue || boatHere || modelgoHere || announcementNow !== false || twoFact !== false || grokNow !== false || phoneNow !== false ? nextNotice({
+    : teamsHere || cards || whatsNewHere || consentHere || simpleDue || boatHere || modelgoHere || announcementNow !== false || twoFact !== false || grokNow !== false || phoneNow !== false ? nextNotice({
+    [TEAMS_NOTICE]: teamsNow,
     [GROK_MOVE_NOTICE]: grokNow,
     [PHONE_UPDATE_NOTICE]: phoneNow,
     // As the What's new popup: never in the launch whose welcome just finished, nor over MausBot's first-launch card.
@@ -258,7 +272,7 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
       : organization === null || moving === null || afterWelcome === null || mausBotFirst || (desktop && !desktopState) ? null : !organization,
     [ANNOUNCEMENT_NOTICE]: announcementNow,
     [STAR_NOTICE]: !bridge || moving || brandStatus().source === "file" || !usedBefore(state.bots) ? false : moving === null ? null : true,
-  }, id => id === CLOUD_INTRO ? stage === "done" && !introOpen
+  }, id => id === TEAMS_NOTICE ? teamsSeen : id === CLOUD_INTRO ? stage === "done" && !introOpen
     : id === STAR_NOTICE || id === PRODUCT_HUNT_NOTICE || id === BOAT_OFFER_NOTICE || id === MODELGO_OFFER_NOTICE ? noticeSeen(record, id) : false, launch, closed) : null;
 
   const shownKey = notice === CLOUD_TRIAL_NOTICE ? key : notice === ANNOUNCEMENT_NOTICE ? `${notice}:${announcement?.id}` : notice;
@@ -266,7 +280,7 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
     if (!shownKey || !notice) return;
     markLaunchNotice(notice);
     // The popups and the question own this launch: MausBot's first-launch card waits for a later one.
-    if (shownKey === GROK_MOVE_NOTICE || shownKey === SIMPLE_MODE_NOTICE || shownKey === WHATS_NEW_NOTICE || shownKey === UPDATES_CONSENT_NOTICE) markLaunchDialog("notices");
+    if (shownKey === TEAMS_NOTICE || shownKey === GROK_MOVE_NOTICE || shownKey === SIMPLE_MODE_NOTICE || shownKey === WHATS_NEW_NOTICE || shownKey === UPDATES_CONSENT_NOTICE) markLaunchDialog("notices");
     if (shownKey === CLOUD_INTRO) {
       setIntroOpen(true);
       track("cloud_card_shown", { variant: view?.kind === "signed-out" ? "signed_out" : "free" });
@@ -315,6 +329,12 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
     return <GrokMovePopup onDone={done} />;
   }
 
+  if (notice === TEAMS_NOTICE) {
+    const action = teamsAction({ team: state.config?.team, viewer, account, canAddCloud: Boolean(bridge) });
+    const done = () => { close(); rememberNoticeSeen(TEAMS_NOTICE, record, { team, desktop, saved: config => dispatch({ type: "configStatus", config }) }); };
+    return <TeamsPopup action={action} onStep={step => reportTeams(step, action)} onDone={done} onStart={() => dispatch({ type: "openCloudAdd", source: WHATS_NEW_SOURCES.team })} />;
+  }
+
   if (notice === PHONE_UPDATE_NOTICE && retiredPhones?.length) {
     const done = () => { close(); const patch = dismissNotices(record, retiredPhones.map(phone => phoneUpdateHint(phone.id)));
       if (patch) void api("/api/config", { method: "PUT", body: JSON.stringify(patch) }).then(config => dispatch({ type: "configStatus", config })).catch(() => {}); };
@@ -339,7 +359,7 @@ export function AppNotices({ quiet = false, viewer = null, now = Date.now }: { q
   }
   if (notice === CLOUD_INTRO && offer) {
     const done = (action: string) => { track("cloud_card_action", { action }); close(); save(CLOUD_INTRO); };
-    return <CloudTrialIntroCard offer={offer}
+    return <CloudTrialIntroCard offer={offer} botsHere={hasBotsHere({ bots: state.bots, cloudHome: state.config?.cloudHome === true, desktop: Boolean(window.ogb), remote: window.ogb?.remoteClient?.active === true })}
       onStart={() => { done("start"); dispatch({ type: "openCloudAdd", source: "app_card" }); }}
       onHowTo={() => { done("howto"); dispatch({ type: "cloudHowTo", open: true }); }}
       onSignIn={view?.kind === "signed-out" ? () => { track("cloud_card_action", { action: "signin" }); close(); dispatch({ type: "openCloudAdd", source: "app_card", signIn: true }); } : undefined}

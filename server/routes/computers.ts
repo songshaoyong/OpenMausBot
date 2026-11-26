@@ -4,7 +4,7 @@ import { z, type ZodString } from "zod";
 import * as boat from "../boat.ts";
 import { boatHealth } from "../boat-health.ts";
 import type { ComputerControl } from "../computer-control.ts";
-import { isValidSshAlias, localVmExposure, localVmMaxInstances, localVmMode, localVmResources, type AppConfig } from "../config.ts";
+import { isValidSshAlias, localVmExposure, localVmMaxInstances, localVmMode, localVmResources, perBotLocalVmLimitProblem, type AppConfig } from "../config.ts";
 import {
   containerComputerAction,
   containerComputerExists,
@@ -35,8 +35,9 @@ import { teamComputerAssignment, teamComputerCreate, teamComputerOwner, type Tea
 import * as vps from "../vps-computer.ts";
 import { vpsAliasesInPlay } from "../vps-hosts.ts";
 import type { BusyFlag, RemoteComputerProvider } from "./config.ts";
+import { createBotComputersRoute, type BotComputersHost } from "./bot-computers.ts";
 import { createCloudComputerRecoveryRoutes, type CloudComputerRecoveryRouteDeps } from "./cloud-computer-recovery.ts";
-import { createComputerFramesRoutes } from "./computer-frames.ts";
+import { createComputerFramesRoutes, createMapFrames } from "./computer-frames.ts";
 import { createComputerUsageRoutes } from "./computer-usage.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
@@ -47,10 +48,10 @@ async function keepSignInsBeforeRemove(target: LocalVmTarget): Promise<void> {
 }
 
 export interface ComputerRouteDeps {
-  store: Pick<Store, "bot" | "bots" | "sections" | "patchBot">;
+  store: Pick<Store, "bot" | "bots" | "sections" | "patchBot" | "tasks">;
   cfg: AppConfig;
   sessions: Pick<SessionRegistry, "isLive">;
-  teamComputers: Pick<TeamComputers, "get" | "create" | "assign" | "setProblem" | "list">;
+  teamComputers: Pick<TeamComputers, "get" | "create" | "assign" | "setProblem" | "list" | "forBot">;
   computerControl: Pick<ComputerControl, "snapshot" | "take" | "release" | "acquireLease" | "releaseLease" | "beat">;
   routines(): Pick<RoutineManager, "activeRunForBot"> | null;
   controlLeaseIdSchema: ZodString;
@@ -58,7 +59,7 @@ export interface ComputerRouteDeps {
   computerProviderConfigTransitions: Pick<Set<RemoteComputerProvider>, "has">;
   localVmActiveThreads: Pick<Map<string, string>, "has">;
   localVmLifecycleBusy: Pick<Set<string>, "has" | "add" | "delete">;
-  localVmSeen: Pick<Set<string>, "add">;
+  localVmSeen: Pick<Set<string>, "add" | "has">;
   localVmImageBusy: BusyFlag;
   localVmProvisionBusy: BusyFlag;
   localVmModeChangeBusy: Pick<BusyFlag, "get">;
@@ -94,6 +95,7 @@ export interface ComputerRouteDeps {
   boatRecovery: CloudComputerRecoveryRouteDeps["boatRecovery"];
   /** Whose cloud computer a bot uses: its own id, or its team computer's key. */
   cloudComputerOwner(bot: BotRecord): string;
+  botComputers: BotComputersHost;
 }
 
 export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
@@ -110,7 +112,10 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
   } = deps;
   const usage = createComputerUsageRoutes(deps);
   // A map owner is a bot id or a team computer's key; a bot's hold may sit on the shared desktop's key.
-  const frames = createComputerFramesRoutes({ ...deps, computerControl: { snapshot: botComputerControlSnapshot } });
+  const frameDeps = { ...deps, computerControl: { snapshot: botComputerControlSnapshot } };
+  const mapFrames = createMapFrames(frameDeps);
+  const frames = createComputerFramesRoutes(frameDeps, mapFrames);
+  const botComputers = createBotComputersRoute({ ...deps, frames: mapFrames });
   const recovery = createCloudComputerRecoveryRoutes({ ...deps, botComputerControlKey: deps.cloudComputerOwner });
   const sharedDesktopRow = async (desktop: { id: string; name: string }) => {
     const target = sharedDesktopLocalVmTarget(desktop.id);
@@ -165,6 +170,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
   return async (context) => {
     if (await usage(context) !== PASS) return;
     if (await frames(context) !== PASS) return;
+    if (await botComputers(context) !== PASS) return;
     if (await recovery(context) !== PASS) return;
     const { req, res, url, path, method, auth, json, readBody } = context;
     const routines = deps.routines();
@@ -584,7 +590,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
       const action = z.enum(["run", "start", "stop", "remove"]).parse(m[2]);
       const target = localVmTargetForBot(bot.id);
       if (target.key === SHARED_LOCAL_VM_TARGET.key) {
-        return json(res, 409, { error: "Shared mode manages this desktop in App Settings → Computers" });
+        return json(res, 409, { error: "Shared mode manages this desktop in Settings → Desktops & browser" });
       }
       if (localVmImageBusy.get() || localVmModeChangeBusy.get() || localVmLifecycleBusy.has(target.key)) {
         return json(res, 409, { error: "this bot's Local VM setup action is still running" });
@@ -605,12 +611,8 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
           const before = await containerComputerStatus(undefined, undefined, target);
           if (!before.runtime) return json(res, 409, { error: before.problem ?? "No container runtime is installed" });
           if (!(await containerComputerExists(before.runtime, target))) {
-            const count = await existingPerBotLocalVmCount(before.runtime);
-            if (count >= localVmMaxInstances(cfg)) {
-              return json(res, 409, {
-                error: `The per-bot Local VM limit is ${localVmMaxInstances(cfg)} — delete an unused bot VM or raise the limit in App Settings`,
-              });
-            }
+            const limit = perBotLocalVmLimitProblem(cfg, await existingPerBotLocalVmCount(before.runtime));
+            if (limit) return json(res, 409, { error: limit });
           }
         }
         if (action === "remove") await keepSignInsBeforeRemove(target);
@@ -661,7 +663,7 @@ export function createComputerRoutes(deps: ComputerRouteDeps): RouteHandler {
         return json(res, 409, { error: "This conversation is not using the Local VM" });
       }
       if (localVmMode(cfg) === "pool") {
-        return json(res, 409, { error: "Phone control is not available in pool mode. Select shared or per-bot mode in Settings → Computers." });
+        return json(res, 409, { error: "Phone control is not available in pool mode. Select shared or per-bot mode in Settings → Desktops & browser." });
       }
       const lease = controlLeaseIdSchema.safeParse(url.searchParams.get("controlLeaseId") ?? undefined);
       if (!lease.success) return json(res, 400, { error: "controlLeaseId is required" });

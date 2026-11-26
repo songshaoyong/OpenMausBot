@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDeleteLeftovers, engineSessionFolders, instanceEnvironment, plainlyUnder, removeMemoryLayer, removeUnder, type DeleteLeftoversDeps } from "./delete-leftovers.ts";
 
@@ -22,7 +22,7 @@ function put(path: string, text = "x"): string {
   return path;
 }
 
-type Task = { threadId: string; resumeCursors?: Record<string, unknown> };
+type Task = { threadId: string; resumeCursors?: Record<string, unknown>; cwd?: string };
 type Bot = { id: string; threadId?: string; resumeCursors?: Record<string, unknown>; tasks?: Task[] };
 
 function fixture(over: Partial<DeleteLeftoversDeps> = {}) {
@@ -147,6 +147,17 @@ describe("a deleted conversation's uploads", () => {
     deleteThreads("t1");
     expect([existsSync(dirname(mine)), existsSync(others)]).toEqual([false, true]);
   });
+
+  it("take the conversation's own notes, and leave the bot's memory and its other conversations' notes", () => {
+    const { dataDir, bots, deleteThreads } = fixture();
+    bots.push({ id: "counsel", tasks: [{ threadId: "t1" }, { threadId: "t2" }] });
+    const memory = join(dataDir, "workspaces", "counsel");
+    const mine = put(join(memory, "memory", "threads", "t1.md"));
+    const others = put(join(memory, "memory", "threads", "t2.md"));
+    const index = put(join(memory, "MEMORY.md"));
+    deleteThreads("t1");
+    expect([existsSync(mine), existsSync(others), existsSync(index)]).toEqual([false, true, true]);
+  });
 });
 
 describe("a deleted conversation's engine sessions", () => {
@@ -263,6 +274,21 @@ describe("a deleted bot", () => {
     expect(forgotten.sort()).toEqual([...layers].sort());
   });
 
+  it("leaves its checkpoints in place until no git is running on them, then takes them", async () => {
+    let quiet = () => {};
+    const asked: string[] = [];
+    const { dataDir, bots, deleteBot } = fixture({ checkpointsQuiet: (botId) => { asked.push(botId); return new Promise<void>((done) => { quiet = done; }); } });
+    bots.push({ id: "scout", tasks: [{ threadId: "t1" }] });
+    const checkpoint = put(join(dataDir, "checkpoints", "scout", "0123456789abcdef", ".git", "HEAD"));
+    const uploaded = put(join(dataDir, "box-uploads", "scout", "t1", upload(1)));
+    deleteBot("scout");
+    await Promise.resolve();
+    expect(asked).toEqual(["scout"]);
+    expect([existsSync(checkpoint), existsSync(uploaded)]).toEqual([true, false]);
+    quiet();
+    await vi.waitFor(() => expect(existsSync(checkpoint)).toBe(false));
+  });
+
   it("never follows a link out of the data folder", () => {
     const { dataDir, outside, bots, deleteBot } = fixture();
     bots.push({ id: "scout", tasks: [{ threadId: "t1" }] });
@@ -274,6 +300,22 @@ describe("a deleted bot", () => {
     deleteBot("scout");
     expect([existsSync(checkpoint), existsSync(layer)]).toEqual([true, true]);
     expect(existsSync(join(dataDir, "workspaces", `scout--member-${MEMBER}`))).toBe(false);
+  });
+});
+
+describe("the conversation folders' cleanup", () => {
+  it("is handed the deleted conversations, the folders they worked in and the deleted bots, and a failure there stays inside it", () => {
+    const calls: unknown[] = [];
+    const { bots, deleteThreads, deleteBot, warnings, say } = fixture({ folders: {
+      conversationsGone: (ids, workedIn) => { calls.push(["threads", [...ids], [...(workedIn ?? [])]]); throw new Error("busy disk"); },
+      botGone: (botId) => { calls.push(["bot", botId]); },
+    } });
+    bots.push({ id: "scout", tasks: [{ threadId: "t1", cwd: "/data/task-workspaces/scout/t0" }, { threadId: "t2" }] });
+    say("t1", upload(1));
+    deleteThreads("t1");
+    deleteBot("scout");
+    expect(calls).toEqual([["threads", ["t1"], ["/data/task-workspaces/scout/t0"]], ["threads", ["t2"], []], ["bot", "scout"]]);
+    expect(warnings.filter((line) => line.includes("busy disk"))).toHaveLength(2);
   });
 });
 

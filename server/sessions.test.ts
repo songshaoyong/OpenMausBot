@@ -255,7 +255,7 @@ describe("pairing codes", () => {
   });
 
   it("explains a code of the wrong kind and does not count it as a guess", () => {
-    for (const [input, key, code] of [["1234 5678", "serverError.pair.emailCode", "pairing_email_code"], ["123456", "serverError.pair.oldCode", "pairing_old_code"], [`omb_sess_${"a".repeat(43)}`, "serverError.pair.scriptKey", "pairing_script_key"]] as const) {
+    for (const [input, key, code] of [["1234 5678", "serverError.pair.emailCode", "pairing_email_code"], ["123456", "serverError.pair.oldCodeDevices", "pairing_old_code"], [`omb_sess_${"a".repeat(43)}`, "serverError.pair.scriptKey", "pairing_script_key"]] as const) {
       for (let i = 0; i < PAIRING_LOCKOUT.failures + 1; i++) {
         const refused = registry.exchange({ code: input, label: "", source: "mixed-up" });
         expect(refused).toMatchObject({ ok: false, status: 400, code, errorKey: key });
@@ -569,6 +569,14 @@ describe("sessions", () => {
     const reloaded = new SessionRegistry({ file: file(), now: () => clock });
     expect(reloaded.authenticate(token)?.id).toBe(session.id);
     expect(reloaded.authenticate("omb_sess_nope")).toBeNull();
+  });
+
+  it("names each device's person when asked, and leaves it out when that is just the label", () => {
+    const mac = pair("Chrome on Mac");
+    pair("iPhone");
+    const named = registry.list((record) => (record.id === mac.session.id ? "Ada" : record.label));
+    expect(named.map((s) => [s.label, s.person])).toEqual([["Chrome on Mac", "Ada"], ["iPhone", undefined]]);
+    expect(registry.list().every((s) => s.person === undefined)).toBe(true);
   });
 
   it("expires after 30 days and can be revoked", () => {

@@ -138,11 +138,13 @@ export const mistralVibeSupport: AcpSupport = {
   displayName: "Mistral (Vibe)",
   models: MISTRAL_VIBE_MODELS,
   defaultCli: "vibe-acp",
-  cliVersion: /^vibe-acp /u,
+  // On Windows the CLI prints its file name: PATHEXT resolves a bare `vibe-acp` to `vibe-acp.EXE`,
+  // and the standalone build keeps the extension and case it was launched as.
+  cliVersion: /^vibe-acp(?:\.exe)? /iu,
   nativeSource: "mistral-vibe.acp",
   images: true,
   loginNote:
-    "Start a first chat: the browser sign-in to Mistral AI Studio opens (it completes behind it). Or paste a Mistral API key under Settings → Connections → Model providers.",
+    "Start a first chat: the browser sign-in to Mistral AI Studio opens (it completes behind it). Or paste a Mistral API key under Settings → AI → Providers.",
   install: {
     command: {
       darwin: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
@@ -163,7 +165,7 @@ export const mistralVibeSupport: AcpSupport = {
     methodId: (methods) => (methods.some((method) => method.id === "browser-auth") ? "browser-auth" : null),
     signedIn: (env) => vibeSignedIn(env),
     get serverHint() {
-      return `${productName()} cannot reach a browser on this server. Sign in from a machine that runs ${productName()}, or paste a Mistral API key under Settings → Connections → Model providers.`;
+      return `${productName()} cannot reach a browser on this server. Sign in from a machine that runs ${productName()}, or paste a Mistral API key under Settings → AI → Providers.`;
     },
     failure(stage, detail) {
       switch (stage) {
@@ -182,6 +184,7 @@ export const mistralVibeSupport: AcpSupport = {
   // Model is a session config option (see header); ids pass through unchanged.
   selectModel: { configId: "model" },
   shareProcess: true,
+  closeBeforeLiveLoad: true,
   resolveModels: resolveMistralVibeModels,
   resolveModelsOnCreate: false,
   fallbackModel(sessionConfig, catalogDefault) {

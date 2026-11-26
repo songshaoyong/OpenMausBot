@@ -7,10 +7,22 @@ import {
   mcpServerLimitError,
   mcpSharedServerRoom,
   mcpServerNameError,
+  mcpServerProblemFor,
   parseMcpServerMutation,
   parseMcpServersImport,
   parseStoredMcpServer,
 } from "./mcp-registry.ts";
+
+describe("a team setup plan's MCP server", () => {
+  it("knows only configured names and refuses another bot's own server", () => {
+    const servers = { hindsight: {}, notes: { bot: "clive" } };
+    expect(mcpServerProblemFor(servers, "hindsight", "ada")).toBeNull();
+    expect(mcpServerProblemFor(servers, "notes", "clive")).toBeNull();
+    expect(mcpServerProblemFor(servers, "notes", "ada")).toBe("that server belongs to another bot");
+    expect(mcpServerProblemFor(servers, "constructor", "ada")).toBe("no such server");
+    expect(mcpServerProblemFor(undefined, "hindsight", "ada")).toBe("no such server");
+  });
+});
 
 describe("custom MCP registry", () => {
   it("parses stdio servers and keeps newly added commands disabled", () => {
@@ -289,6 +301,32 @@ describe("a url server's sign-in app", () => {
       oauth: { clientId: "corp-app", scopes: ["api://mcp/read"], clientSecretConfigured: true },
     }]);
     expect(JSON.stringify(listings)).not.toContain("app-secret-value");
+  });
+
+  it("keeps a configured redirect uri for an app registered on an https address, and refuses other addresses", () => {
+    expect(parseStoredMcpServer("docs", { url, oauth: { clientId: "corp-app", redirectUri: " https://docs.example/mcp-oauth/callback " } })).toEqual({
+      ok: true,
+      server: { type: "http", url, headers: {}, oauth: { clientId: "corp-app", redirectUri: "https://docs.example/mcp-oauth/callback" }, enabled: true },
+    });
+    expect(parseStoredMcpServer("docs", { url, oauth: { clientId: "corp-app", redirectUri: "http://127.0.0.1:20000/mcp-oauth/callback" } })).toMatchObject({
+      ok: false, error: expect.stringMatching(/must be an https address/),
+    });
+    expect(parseStoredMcpServer("docs", { url, oauth: { clientId: "corp-app", redirectUri: "https://docs.example/other" } })).toMatchObject({
+      ok: false, error: expect.stringMatching(/must be an https address/),
+    });
+    expect(parseStoredMcpServer("docs", { url, oauth: { clientId: "corp-app", redirectUri: "https://user:pw@docs.example/mcp-oauth/callback" } })).toMatchObject({ ok: false });
+  });
+
+  it("keeps a configured redirect uri through an edit that leaves it out, only for the same client id", () => {
+    const configured = { ...saved, oauth: { clientId: "corp-app", redirectUri: "https://maus.example/mcp-oauth/callback" } };
+    expect(parseMcpServerMutation("docs", { url, oauth: { clientId: "corp-app", scopes: ["offline_access"] } }, configured)).toEqual({
+      ok: true,
+      server: { type: "http", url, headers: {}, oauth: { clientId: "corp-app", scopes: ["offline_access"], redirectUri: "https://maus.example/mcp-oauth/callback" }, enabled: true },
+    });
+    expect(parseMcpServerMutation("docs", { url, oauth: { clientId: "other-app" } }, configured)).toEqual({
+      ok: true,
+      server: { type: "http", url, headers: {}, oauth: { clientId: "other-app" }, enabled: true },
+    });
   });
 
   it("keeps a saved secret behind a placeholder only for the same client id", () => {

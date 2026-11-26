@@ -4,7 +4,7 @@
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { EMAIL_MCP_SERVER, EMAIL_SLUG, type EmailToolName } from "../../shared/email.ts";
+import { EMAIL_MCP_SERVER, EMAIL_READ_TOOL_NAMES, EMAIL_SLUG, type EmailToolName } from "../../shared/email.ts";
 import { connectorAccessDecision, describeConnectorScopes, type ConnectorScopes } from "../../shared/connector-scopes.ts";
 import type { ConnectorToolGrant } from "../../shared/wire.ts";
 import { connectorRefusalText, connectorScopeRefusalText, evaluateConnectorTools } from "../connector-verdict.ts";
@@ -96,7 +96,7 @@ export function createEmailHost(deps: EmailHostDeps) {
     return accounts[0]!;
   }
 
-  async function call(name: EmailToolName, args: Record<string, any>, mailbox: EmailAccount, capability: { botId: string; threadId: string }): Promise<EmailToolResult> {
+  async function call(name: EmailToolName, args: Record<string, any>, mailbox: EmailAccount, capability: { botId: string; threadId: string }, assertActive: () => void): Promise<EmailToolResult> {
     const { guard } = service;
     const box = typeof args.mailbox === "string" && args.mailbox ? args.mailbox : "INBOX";
     const limit = Math.min(args.limit ?? 20, LIST_MAX);
@@ -115,7 +115,7 @@ export function createEmailHost(deps: EmailHostDeps) {
           const references = [...ancestors, ...(original.messageId ? [original.messageId] : [])];
           threading = { ...(original.messageId ? { inReplyTo: original.messageId } : {}), ...(references.length ? { references: references.join(" ") } : {}) };
         }
-        return emailText({ account: from, ...await run.sendMessage(mailbox, guard, { to: args.to, subject: args.subject, text: args.text, ...pick(args, ["cc", "bcc", "html", "inline_images"]), ...threading }) });
+        return emailText({ account: from, ...await run.sendMessage(mailbox, guard, { to: args.to, subject: args.subject, text: args.text, ...pick(args, ["cc", "bcc", "html", "inline_images"]), ...threading }, assertActive) });
       }
     }
   }
@@ -140,10 +140,14 @@ export function createEmailHost(deps: EmailHostDeps) {
     toolListing: () => (service.status().state === "unavailable" ? null : { email: EMAIL_TOOLS.map(({ name, description }) => ({ name, description })) }),
 
     /** The JSON-RPC entry the harness proxy reaches: tools/list (what this bot may run) and tools/call (validate, verdict, run). */
-    async handle(body: unknown, capability: { botId: string; threadId: string }, assertActive: () => void): Promise<{ tools: EmailTool[]; instructions: string } | EmailToolResult> {
+    /** `readOnly`: only the reading tools, and what any other answers (work from the person's other place, server/bot-link/far-side.ts). */
+    async handle(body: unknown, capability: { botId: string; threadId: string }, assertActive: () => void, readOnly?: string): Promise<{ tools: EmailTool[]; instructions: string } | EmailToolResult> {
       const request = (body ?? {}) as { method?: unknown; params?: unknown };
       // Re-read the live bot on every call, so a permission change wins over a request authenticated under the old one.
-      const verdict = (name: string): Verdict => { const bot = deps.bot(capability.botId); return bot ? emailAccess(bot, name) : { ok: false, text: "This bot no longer exists.", rule: "bot" }; };
+      const verdict = (name: string): Verdict => {
+        if (readOnly !== undefined && !(EMAIL_READ_TOOL_NAMES as readonly string[]).includes(name)) return { ok: false, text: readOnly, rule: "read-only" };
+        const bot = deps.bot(capability.botId); return bot ? emailAccess(bot, name) : { ok: false, text: "This bot no longer exists.", rule: "bot" };
+      };
       if (request.method === "tools/list") {
         assertActive();
         return { tools: EMAIL_TOOLS.filter((tool) => verdict(tool.name).ok), instructions: EMAIL_INSTRUCTIONS };
@@ -167,7 +171,7 @@ export function createEmailHost(deps: EmailHostDeps) {
       if (isEmailRead(name)) deps.markOutside(capability.threadId);
       let result: EmailToolResult;
       try {
-        result = await call(name, args, mailbox, capability);
+        result = await call(name, args, mailbox, capability, assertActive);
       } catch (error) {
         if (error instanceof SendingError) {
           if (!LASTING_SENDING_FAULTS.has(error.fault)) return emailError(EMAIL_NOT_SENT_TEXT(error.message));

@@ -49,6 +49,8 @@ let assignmentStatusCode = 200;
 let lastThreadBody: any = null;
 let threadCalls = 0;
 let threadsList: unknown = { threads: [] };
+let closeReply: unknown = {};
+let lastThreadsUrl = "";
 let threadResponse: unknown = { threadId: "thread-new", title: "QA: PR #1", botId: "bot-asker", botName: "Asker", self: true, state: "running", limit: 3 };
 let computerRequests: { method: string; url: string; body: unknown }[] = [];
 let computerResponse: unknown = { current: "local", available: ["local", "vm"] };
@@ -269,8 +271,14 @@ beforeAll(async () => {
       return;
     }
     if (req.method === "GET" && req.url?.startsWith("/api/internal/threads?")) {
+      lastThreadsUrl = req.url;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(threadsList));
+      return;
+    }
+    if (req.method === "POST" && /^\/api\/internal\/threads\/[\w-]+\/close$/.test(req.url ?? "")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(closeReply));
       return;
     }
     if (req.method === "POST" && req.url === "/api/internal/threads") {
@@ -512,7 +520,9 @@ describe("agents-proxy MCP surface", () => {
         expect(description).toContain("Only a pending result requires ending the turn");
       } else {
         expect(description).toContain("It applies at once, with an Undo where possible: read the result before saying it did.");
-        expect(description).toContain("It never raises another bot's execution permissions.");
+        // A Chief's team setup may set a bot's MCP servers, so it names that instead.
+        if (tool === "propose_team_setup") expect(description).toContain("mcpServers sets an existing bot's MCP servers; no other execution permission changes.");
+        else expect(description).toContain("It never raises another bot's execution permissions.");
       }
     }
     const credential = list.result.tools.find((entry: { name: string }) => entry.name === "request_credential");
@@ -644,6 +654,9 @@ describe("agents-proxy MCP surface", () => {
       "list_threads",
       "close_thread",
       "rename_thread",
+      "set_main_thread",
+      "run_workflow",
+      "workflow_edit",
       "start_thread",
       "burst",
       "list_models",
@@ -666,8 +679,10 @@ describe("agents-proxy MCP surface", () => {
       "fill_login",
       "decide",
       "extract",
+      "what_changed",
       "message_person",
       "report_bug",
+      "share",
       "memory_update",
       "retry_thread",
       "memory_log",
@@ -678,6 +693,7 @@ describe("agents-proxy MCP surface", () => {
       "wait_until",
       "list_waits",
       "cancel_wait",
+      "check_back",
       "propose_profile",
       "propose_model",
       "propose_team_memory",
@@ -769,7 +785,7 @@ describe("agents-proxy MCP surface", () => {
       "list_shared_computers",
       "assignment_status", "list_bots", "usage_limits", "list_rooms", "list_threads",
       "list_models", "list_team_setup",
-      "session_search", "trigger_info", "list_waits", "skills_list",
+      "what_changed", "session_search", "trigger_info", "list_waits", "skills_list",
     ];
     expect(list.result.tools.filter((tool: any) => tool.annotations?.readOnlyHint)
       .map((tool: any) => tool.name)).toEqual(readNames);
@@ -938,6 +954,13 @@ describe("agents-proxy MCP surface", () => {
     execResponse = { exitCode: 0, stdout: "PDF_OK\n", stderr: "", timedOut: false };
   });
 
+  it("answers a call whose arguments hold a raw U+2028 or U+2029, which JSON.stringify leaves unescaped", async () => {
+    const command = "printf 'a\u2028b\u2029c'";
+    const reply = await callTool("vm_exec", { command });
+    expect(reply.result.content[0].text).toBe("exit code 0\n--- stdout ---\nPDF_OK");
+    expect(lastExecBody).toEqual({ command });
+  });
+
   it("attach_file sends only the path and name, and tells the model the file is in the chat", async () => {
     const res = await callTool("attach_file", { path: "/home/cua/workspace/report.pdf", name: "Q3 report.pdf" });
     expect(res.result.isError).toBeFalsy();
@@ -984,6 +1007,30 @@ describe("agents-proxy MCP surface", () => {
     expect(start.description).toContain('use coordinate_bots for teammates (thread "new" opens a fresh thread on them)');
     expect(start.description).toContain("do not retry it");
     expect(start.description).not.toMatch(/\b(delegate_bot|ask_bot)\b/);
+  });
+
+  it.each(["bot", "botId", "toBotId", "bot_ids", "reportBack"])("start_thread refuses unknown %s before creating a task", async (key) => {
+    const before = threadCalls;
+    const res = await callTool("start_thread", { title: "Review", message: "Review the patch.", [key]: "Helper" });
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toContain(`unknown arguments "${key}"`);
+    expect(res.result.content[0].text).toContain("coordinate_bots with bot_ids from list_bots");
+    expect(threadCalls).toBe(before);
+  });
+
+  it.each([null, "", "   ", 42, ["bot-helper"], { id: "bot-helper" }])("start_thread refuses an invalid legacy bot_id %j instead of falling back to itself", async (bot_id) => {
+    const before = threadCalls;
+    const res = await callTool("start_thread", { title: "Review", message: "Review the patch.", bot_id });
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toContain("bot_id must be a non-empty bot ID");
+    expect(threadCalls).toBe(before);
+  });
+
+  it("start_thread does not ignore a conflicting recipient alias beside a valid legacy bot_id", async () => {
+    const before = threadCalls;
+    const res = await callTool("start_thread", { title: "Review", message: "Review the patch.", bot_id: "bot-helper", bot: "Another helper" });
+    expect(res.result.isError).toBe(true);
+    expect(threadCalls).toBe(before);
   });
 
   it("start_thread on a teammate is a hand-off into a fresh thread: the receipt's thread and assignment id, no deprecation line", async () => {
@@ -1245,17 +1292,19 @@ describe("agents-proxy MCP surface", () => {
     expect(JSON.stringify(tool.inputSchema)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
   });
 
-  it("assignment_status relays the harness's refusal to read an assignment handed out this turn", async () => {
+  it("assignment_status passes on an assignment sent this turn, and keeps a real failure a failure", async () => {
     // Which turn made it is the harness's to know: a warm proxy serves many.
     assignmentStatusCode = 409;
-    assignmentStatusResponse = { error: "Assignment asg-abc123 was handed out during this turn. Finish your response now so the teammate can work; its result returns to this conversation and resumes you. Do not check or wait for it until a later turn." };
+    assignmentStatusResponse = { error: "Assignment asg-abc123 was handed out during this turn. Finish your response now so the teammate can work; its result returns to this conversation and resumes you. Do not check or wait for it until a later turn.", sentThisTurn: true };
     try {
       lastAssignmentStatusUrl = null;
       const status = await callTool("assignment_status", { id: "asg-abc123", wait_ms: 240_000 });
-      expect(status.result.isError).toBe(true);
+      expect(status.result.isError).toBeFalsy();
       expect(status.result.content[0].text).toContain("handed out during this turn");
       expect(status.result.content[0].text).toContain("Finish your response now");
       expect(lastAssignmentStatusUrl).toBe("/api/internal/assignment-status?id=asg-abc123&wait_ms=240000");
+      assignmentStatusResponse = { error: "Assignment asg-abc123 was handed out during this turn. Finish your response now so the teammate can work; its result returns to this conversation and resumes you. Do not check or wait for it until a later turn." };
+      expect((await callTool("assignment_status", { id: "asg-abc123" })).result.isError).toBe(true);
     } finally {
       assignmentStatusCode = 200;
       assignmentStatusResponse = DONE_ASSIGNMENT;
@@ -1314,6 +1363,47 @@ describe("agents-proxy MCP surface", () => {
     }
   });
 
+  it("close_thread and list_threads say whether a thread is archived, and a repeat close says it was already closed", async () => {
+    try {
+      closeReply = { closed: true, threadId: "t-1", title: "Export CSV", botName: "Ops", archived: false };
+      expect((await callTool("close_thread", { thread_id: "t-1" })).result.content[0].text)
+        .toBe("Closed #Export CSV on @Ops. It stays in the person's sidebar, idle, with a note that you closed it.");
+      closeReply = { closed: true, threadId: "t-1", title: "Export CSV", botName: "Ops", archived: true };
+      expect((await callTool("close_thread", { thread_id: "t-1" })).result.content[0].text)
+        .toBe("Closed #Export CSV on @Ops. It was archived already, so it stays out of the person's sidebar, with a note that you closed it.");
+      closeReply = { closed: true, alreadyClosed: true, threadId: "t-1", title: "Export CSV", botName: "Ops", closedBy: "Clive", archived: true };
+      expect((await callTool("close_thread", { thread_id: "t-1" })).result.content[0].text)
+        .toBe("#Export CSV on @Ops was already closed by @Clive, so nothing changed. It is archived: it is no longer in the person's sidebar.");
+      closeReply = { closed: true, alreadyClosed: true, threadId: "t-1", title: "Export CSV", botName: "Ops", closedBy: "Clive", archived: false };
+      expect((await callTool("close_thread", { thread_id: "t-1" })).result.content[0].text)
+        .toBe("#Export CSV on @Ops was already closed by @Clive, so nothing changed. It stays in the person's sidebar, idle.");
+      threadsList = { threads: [{ threadId: "t-1", botId: "bot-ops", botName: "Ops", title: "Export CSV", state: "closed", archived: true, own: false, unread: false, openedAt: 1 }] };
+      expect((await callTool("list_threads", {})).result.content[0].text)
+        .toBe("Threads, newest first:\n- #Export CSV (on @Ops, closed, archived: no longer in the person's sidebar) [thread id: t-1]");
+    } finally {
+      closeReply = {};
+      threadsList = { threads: [] };
+    }
+  });
+
+  it("list_threads names the next page when more threads are left, and asks for the page it is given", async () => {
+    const row = { threadId: "t-1", botId: "bot-a", botName: "A", title: "Event 1", state: "idle", own: true, unread: false, openedAt: 1 };
+    threadsList = { threads: [row], total: 101, page: 1, pageSize: 100 };
+    try {
+      expect((await callTool("list_threads", {})).result.content[0].text).toContain("Showing 1-1 of 101. For older ones call list_threads with page 2.");
+      threadsList = { threads: [row], total: 101, page: 2, pageSize: 100 };
+      const last = (await callTool("list_threads", { page: 2 })).result.content[0].text;
+      expect(new URL(lastThreadsUrl, "http://x").searchParams.get("page")).toBe("2");
+      expect(last).toContain("#Event 1");
+      expect(last).not.toContain("Showing");
+      threadsList = { threads: [], total: 101, page: 3, pageSize: 100 };
+      expect((await callTool("list_threads", { page: 3 })).result.content[0].text).toBe("No threads on page 3: there are 101, 100 to a page.");
+      expect((await callTool("list_threads", { page: 0 })).result.content[0].text).toContain("was not run");
+    } finally {
+      threadsList = { threads: [] };
+    }
+  });
+
   it("assignment_status with an id renders status, outcome, the result head and the assignment's own hand-offs", async () => {
     assignmentStatusResponse = {
       assignment: { id: "asg-9", botId: "bot-helper", botName: "Helper", status: "failed", outcome: "provider_error", outcomeDetail: "the engine exited early", result: "x".repeat(2_500) },
@@ -1332,6 +1422,20 @@ describe("agents-proxy MCP surface", () => {
     expect(text).not.toMatch(/Deprecated/);
     expect(lastAssignmentStatusUrl).toBe("/api/internal/assignment-status?id=asg-9");
     assignmentStatusResponse = DONE_ASSIGNMENT;
+  });
+
+  it("assignment_status on a hand-off sent from another own chat says its result does not resume this one", async () => {
+    const running = { assignment: { id: "asg-7", botId: "bot-helper", botName: "Helper", status: "running" }, children: [], inbox: [] };
+    try {
+      assignmentStatusResponse = running;
+      expect((await callTool("assignment_status", { id: "asg-7" })).result.content[0].text).toContain("Its result resumes you on its own");
+      assignmentStatusResponse = { ...running, sentElsewhere: true };
+      const text = (await callTool("assignment_status", { id: "asg-7" })).result.content[0].text;
+      expect(text).toContain("It was sent from another of your chats, so its result returns there and does not resume you here");
+      expect(text).not.toContain("resumes you on its own");
+    } finally {
+      assignmentStatusResponse = DONE_ASSIGNMENT;
+    }
   });
 
   it("assignment_status long-polls with wait_ms, capped at 240000, and refuses a bad wait", async () => {
@@ -1358,9 +1462,10 @@ describe("agents-proxy MCP surface", () => {
       expect(missing.result.isError).toBe(true);
       expect(missing.result.content[0].text).toContain("No assignment asg-gone is known here");
       assignmentStatusCode = 403;
+      assignmentStatusResponse = { error: "it was handed off by another bot" };
       const foreign = await callTool("assignment_status", { id: "asg-theirs" });
       expect(foreign.result.isError).toBe(true);
-      expect(foreign.result.content[0].text).toContain("Assignment asg-theirs is not this conversation's");
+      expect(foreign.result.content[0].text).toBe("Assignment asg-theirs can't be read here: it was handed off by another bot.");
     } finally {
       assignmentStatusCode = 200;
       assignmentStatusResponse = DONE_ASSIGNMENT;
@@ -1507,7 +1612,7 @@ describe("agents-proxy MCP surface", () => {
 
   it("session_search lists memory-file hits by file, ahead of conversation hits, and forwards the scope", async () => {
     const list = await rpc("tools/list");
-    expect(list.result.tools.find((t: { name: string }) => t.name === "session_search").inputSchema.properties.scope.enum).toEqual(["all", "conversations", "memory", "team"]);
+    expect(list.result.tools.find((t: { name: string }) => t.name === "session_search").inputSchema.properties.scope.enum).toEqual(["all", "conversations", "memory", "team", "threads"]);
     sessionSearchResponse = {
       hits: [{ threadId: "thread-old", messageId: "m-audit", at: Date.UTC(2026, 8, 1), role: "bot", snippet: "the [audit] found three [broken] [links]", task: "Site audit", current: false }],
       memoryHits: [
@@ -2106,7 +2211,7 @@ describe("agents-proxy MCP surface", () => {
     const manage = list.result.tools.find((t: { name: string }) => t.name === "skill_manage");
     expect(JSON.stringify(manage.inputSchema)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
     expect(manage.inputSchema.required).toEqual(["action"]);
-    expect(manage.inputSchema.properties.action.enum).toEqual(["create", "update", "enable", "disable", "delete"]);
+    expect(manage.inputSchema.properties.action.enum).toEqual(["create", "update", "import", "enable", "disable", "delete"]);
 
     const listed = await callTool("skills_list", {});
     expect(listed.result.content[0].text).toContain("file-expense");
@@ -2494,7 +2599,7 @@ describe("tool bridge", () => {
   /** The main child's switches: a Chief with skills and shared computers. */
   const CHIEF = { OMB_SKILL_AUTHORING_ENABLED: "1", OMB_SHARED_COMPUTERS_ENABLED: "1", OMB_CHIEF_OF_STAFF: "1", OMB_COMPUTER_SELECTION: "1" };
   const CHIEF_ONLY = ["create_bot", "list_team_setup", "propose_team_setup", "propose_bot_deletion", "manage_room", "retry_thread"];
-  const HOT = ["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "post_to_thread", "request_credential", "request_sign_in", "fill_login", "message_person", "memory_update"];
+  const HOT = ["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "post_to_thread", "request_credential", "request_sign_in", "fill_login", "message_person", "share", "memory_update"];
   let chief: Rpc;
   let plain: Rpc;
   let off: Rpc;

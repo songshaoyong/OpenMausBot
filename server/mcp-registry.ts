@@ -34,6 +34,23 @@ export interface McpOAuthClientConfig {
   clientId: string;
   clientSecret?: string;
   scopes?: string[];
+  /** Where the app is registered to return, when it is an https address rather than this computer's loopback: the only
+   * return a browser on another computer can reach. Absent: the loopback address, pasted back. */
+  redirectUri?: string;
+}
+
+/** The return address a configured app may name: this server's https address, at the callback path. */
+export function mcpConfiguredRedirectError(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "The redirect URI must be an https address ending in /mcp-oauth/callback.";
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/mcp-oauth/callback") {
+    return "The redirect URI must be an https address ending in /mcp-oauth/callback.";
+  }
+  return null;
 }
 export interface StoredRemoteMcpServer extends RemoteMcpSpec {
   enabled: boolean;
@@ -67,7 +84,7 @@ export interface RemoteMcpServerListing {
   enabled: boolean;
   resultBudget?: number;
   apps: boolean;
-  oauth?: { clientId: string; scopes: string[]; clientSecretConfigured: boolean };
+  oauth?: { clientId: string; scopes: string[]; clientSecretConfigured: boolean; redirectUri?: string };
   runsOn?: McpRunsOn;
   bot?: string;
 }
@@ -80,6 +97,13 @@ export function isRemoteMcpServer(server: McpServerSpec): server is RemoteMcpSpe
 /** Whether `botId` may start this server: every bot may start one that is no bot's own. */
 export function mcpServerServes(server: object & { bot?: string }, botId: string | undefined): boolean {
   return !server.bot || server.bot === botId;
+}
+
+/** Why a team setup plan cannot give this bot the named server, or null when it can. */
+export function mcpServerProblemFor(servers: Record<string, unknown> | undefined, name: string, botId: string): string | null {
+  const server = servers && Object.hasOwn(servers, name) ? servers[name] : undefined;
+  if (!server || typeof server !== "object") return "no such server";
+  return mcpServerServes(server, botId) ? null : "that server belongs to another bot";
 }
 
 /** How many MCP servers one bot can use: the shared ones plus its own. */
@@ -225,6 +249,7 @@ const oauthClientSchema = z.object({
     .regex(CLIENT_ID, "A client ID is printable text on one line."),
   clientSecret: z.string().min(1).max(CLIENT_SECRET_MAX).regex(CLIENT_ID, "A client secret is printable text on one line.").optional(),
   scopes: z.array(z.string().max(256).regex(SCOPE, "Scopes are single words, like offline_access or api://my-app/mcp.read.")).max(32).optional(),
+  redirectUri: z.string().trim().max(2_048).optional(),
 }).strict();
 
 const remoteEntrySchema = z.object({
@@ -264,9 +289,19 @@ function resolveOAuthClient(
     clientSecret = incoming.clientSecret;
   }
   const scopes = [...new Set(incoming.scopes ?? [])];
+  if (incoming.redirectUri !== undefined) {
+    const redirectError = mcpConfiguredRedirectError(incoming.redirectUri);
+    if (redirectError) return { ok: false, error: redirectError };
+  }
+  const redirectUri = incoming.redirectUri ?? (saved?.clientId === incoming.clientId ? saved.redirectUri : undefined);
   return {
     ok: true,
-    value: { clientId: incoming.clientId, ...(clientSecret ? { clientSecret } : {}), ...(scopes.length ? { scopes } : {}) },
+    value: {
+      clientId: incoming.clientId,
+      ...(clientSecret ? { clientSecret } : {}),
+      ...(scopes.length ? { scopes } : {}),
+      ...(redirectUri ? { redirectUri } : {}),
+    },
   };
 }
 
@@ -467,7 +502,12 @@ export function listMcpServers(raw: Record<string, unknown> | undefined): McpSer
         ...(server.resultBudget !== undefined ? { resultBudget: server.resultBudget } : {}),
         apps: server.apps !== false,
         ...(server.oauth ? {
-          oauth: { clientId: server.oauth.clientId, scopes: server.oauth.scopes ?? [], clientSecretConfigured: Boolean(server.oauth.clientSecret) },
+          oauth: {
+            clientId: server.oauth.clientId,
+            scopes: server.oauth.scopes ?? [],
+            clientSecretConfigured: Boolean(server.oauth.clientSecret),
+            ...(server.oauth.redirectUri ? { redirectUri: server.oauth.redirectUri } : {}),
+          },
         } : {}),
         ...(server.runsOn ? { runsOn: server.runsOn } : {}),
         ...(server.bot ? { bot: server.bot } : {}),

@@ -32,7 +32,7 @@ const choicesPath = (botId: string) => join(DATA_DIR, "skill-state", botId, "imp
 const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
 const entrySchema = z.object({
   description: z.string(),
-  source: z.enum(["claudeCode", "codex"]),
+  source: z.enum(["claudeCode", "codex", "hermes", "openclaw"]),
   /** The folder it was read from, such as ~/.claude/skills: an engine that loads that folder itself skips the copy. */
   root: z.string(),
   /** Its own folder there, which the engine loads only while it is still there. */
@@ -339,7 +339,7 @@ export function importedSkillsFor(botId: string, shadowed: ReadonlySet<string>, 
   });
 }
 
-export const IMPORTED_CHANGED_WARNING = "its files changed after it was brought in — bring it in again from Settings → Replay welcome tour";
+export const IMPORTED_CHANGED_WARNING = "its files changed after it was brought in — bring it in again from Settings → Import & export → Bring things in → From your AI apps";
 
 export type ImportedSkillListing = SkillListing & { origin: "imported"; listed: boolean; file?: string };
 

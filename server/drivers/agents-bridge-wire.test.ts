@@ -72,6 +72,8 @@ function profiles(): Record<string, Record<string, string>> {
   all["default+images"] = { ...all.default!, OMB_IMAGE_GENERATION: "1" };
   all["skills+shared+voice+x+team+images+hosting"] = { ...all["skills+shared+voice+x+team+images"]!, OMB_APP_HOSTING: "1" };
   all["default+hosting"] = { ...all.default!, OMB_APP_HOSTING: "1" };
+  all["skills+shared+voice+x+team+board"] = { ...all["skills+shared+voice+x+team"]!, OMB_TEAM_BOARD: "1" };
+  all["default+room+board"] = { ...all["default+room"]!, OMB_TEAM_PEOPLE: "1", OMB_TEAM_BOARD: "1" };
   all["default+tools-off"] = { ...all.default!, OMB_TOOLS_OFF: "pages,meetings" };
   return all;
 }
@@ -87,37 +89,39 @@ const FULL = "skills+shared+voice+x+team+images+hosting";
  * either: lock a saving in by lowering the number. A Chief's list is longer
  * than another bot's only by the Chief-only names in find_tool's description. */
 const BUDGET_BASELINE: Record<string, number> = {
-  "default": 17020,
-  "voice": 17801,
-  "shared": 17060,
-  "shared+voice": 17841,
-  "skills": 17047,
-  "skills+voice": 17828,
-  "skills+shared": 17087,
-  "skills+shared+voice": 17868,
-  "non-chief": 16903,
-  "voice+non-chief": 17684,
-  "shared+non-chief": 16943,
-  "shared+voice+non-chief": 17724,
-  "skills+non-chief": 16930,
-  "skills+voice+non-chief": 17711,
-  "skills+shared+non-chief": 16970,
-  "skills+shared+voice+non-chief": 17751,
-  "skills+shared+voice+cloud-home": 17884,
-  "skills+shared+voice+non-chief+cloud-home": 17767,
-  "skills+shared+voice+x": 17929,
-  "skills+shared+voice+x+team": 17929,
-  "default+legacy-switches": 17020,
-  "default+mausbot": 17072,
-  "skills+shared+voice+mausbot": 17920,
-  "default+no-computer-pick": 15808,
-  "default+room": 15749,
-  "non-chief+room": 15632,
-  "skills+shared+voice+x+team+images": 17945,
-  "default+images": 17036,
-  "skills+shared+voice+x+team+images+hosting": 19147,
-  "default+hosting": 18222,
-  "default+tools-off": 16087,
+  "default": 18076,
+  "voice": 18857,
+  "shared": 18116,
+  "shared+voice": 18897,
+  "skills": 18103,
+  "skills+voice": 18884,
+  "skills+shared": 18143,
+  "skills+shared+voice": 18924,
+  "non-chief": 17959,
+  "voice+non-chief": 18740,
+  "shared+non-chief": 17999,
+  "shared+voice+non-chief": 18780,
+  "skills+non-chief": 17986,
+  "skills+voice+non-chief": 18767,
+  "skills+shared+non-chief": 18026,
+  "skills+shared+voice+non-chief": 18807,
+  "skills+shared+voice+cloud-home": 18940,
+  "skills+shared+voice+non-chief+cloud-home": 18823,
+  "skills+shared+voice+x": 18985,
+  "skills+shared+voice+x+team": 18985,
+  "default+legacy-switches": 18076,
+  "default+mausbot": 18128,
+  "skills+shared+voice+mausbot": 18976,
+  "default+no-computer-pick": 16864,
+  "default+room": 16793,
+  "non-chief+room": 16676,
+  "skills+shared+voice+x+team+images": 19013,
+  "default+images": 18104,
+  "skills+shared+voice+x+team+images+hosting": 20215,
+  "default+hosting": 19278,
+  "default+tools-off": 16419,
+  "skills+shared+voice+x+team+board": 19047,
+  "default+room+board": 16855,
 };
 
 type RpcAnswer = { id: number; result?: { tools?: unknown[]; content?: Array<{ text: string }>; isError?: boolean }; error?: { code: number; message: string } };
@@ -286,7 +290,7 @@ describe("agents proxy tools/list golden with the tool bridge on", () => {
   it("keeps the same hot tools whatever the role and features, except the ones a profile does not have", () => {
     const hotOf = (name: string) => toolsOf(wires[name]!).slice(0, -2).map((tool) => tool.name);
     const base = hotOf("default");
-    expect(base).toEqual(["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "post_to_thread", "request_credential", "request_sign_in", "fill_login", "message_person", "memory_update"]);
+    expect(base).toEqual(["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "post_to_thread", "request_credential", "request_sign_in", "fill_login", "message_person", "share", "memory_update"]);
     for (const name of Object.keys(PROFILES)) {
       const selects = PROFILES[name]!.OMB_COMPUTER_SELECTION === "1";
       const off = toolsOffNames(toolsOffFromEnv(PROFILES[name]!.OMB_TOOLS_OFF));

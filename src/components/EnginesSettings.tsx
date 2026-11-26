@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
 
-import { api, useStore, type InstanceInfo } from "@/state/store";
+import { api, type InstanceInfo } from "@/state/store";
+import { useShowInstances } from "@/state/use-show-instances";
 import { EngineCard, EngineSections, RefreshEngines, engineReady } from "./EngineLibrary";
 import { cn } from "@/lib/cn";
 import { useMenuMotion } from "./MenuMotion";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { ApiKeyEngineManage, EngineSetup, EngineUpdateNotice, EngineWarningNotice, isApiKeyEngine } from "./EngineSetup";
+import { AntigravitySwitchCli } from "./AntigravitySwitchCli";
 import { AppCopyNotice } from "./EngineAppCopy";
 import { forgetAppCopySwitches } from "@/state/engine-install";
 import { AccountsCard, AddAccount, accountGroupOf, accountsReady, type AccountGroup } from "./EngineAccounts";
@@ -22,7 +24,11 @@ import { SettingsFoldRow, SettingsGroup, SettingsMark, SettingsRows, StatusDot }
 import { OllamaModels, ollamaShortStatus } from "./OllamaStatusLine";
 import { isAddedServer } from "@/lib/openai-compat-endpoints";
 import { InstanceProviderMark } from "./ProviderIcons";
+import { GEMINI_PRESET, GeminiServer, hasGeminiServer } from "./OpenAiCompatServers";
 import { HiddenEngines, HiddenProviderRows, useHiddenProviders } from "./HiddenProviders";
+import { AdminOnly } from "./AdminOnly";
+import { modelgoOfferable, sponsorRowRaised } from "@/lib/modelgo-offer";
+import { sameFields, useStoreActions, useStoreSelector } from "@/state/store-select";
 
 export { HiddenEngines };
 
@@ -192,7 +198,8 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
 
 /** The executable behind an engine: its path, Claude's self-update, and a reset to the default. */
 function EngineAdvanced({ instance }: { instance: InstanceInfo }) {
-  const { refreshInstances } = useStore();
+  const { refreshInstances } = useStoreActions();
+  const showInstances = useShowInstances();
   const [open, setOpen] = useState(false);
   const cliMotion = useMenuMotion(open);
   const [switching, setSwitching] = useState(false);
@@ -227,7 +234,7 @@ function EngineAdvanced({ instance }: { instance: InstanceInfo }) {
     setSwitching(true);
     setError(null);
     api(`/api/instances/${encodeURIComponent(instance.instanceId)}`, { method: "PATCH", body: JSON.stringify({ hidden: true }) })
-      .then(() => Promise.resolve(refreshInstances()).catch(() => {}))
+      .then((answer) => showInstances(answer).catch(() => {}))
       .catch((e) => setError(e.message))
       .finally(() => setSwitching(false));
   };
@@ -332,12 +339,12 @@ function EngineAdvanced({ instance }: { instance: InstanceInfo }) {
 /** Remove drops an added Antigravity account or an added server; Sign out forgets a signed-in account's sign-in (Antigravity's
  * Google one, or a CLI's own login such as Kimi's) and never hides the provider, which stays listed with Set up. */
 function EngineAccountAction({ instance, action, cli = false, removeBody = "accounts.removeBodyAntigravity" }: { instance: InstanceInfo; action: "remove" | "signOut"; cli?: boolean; removeBody?: LocaleKey }) {
-  const { state, dispatch, refreshInstances } = useStore();
+  const showInstances = useShowInstances();
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const remove = action === "remove";
-  const usedBy = remove ? state.bots.filter((bot) => bot.modelSelection.instanceId === instance.instanceId).length : 0;
+  const usedBy = useStoreSelector((s) => remove ? s.bots.filter((bot) => bot.modelSelection.instanceId === instance.instanceId).length : 0);
   const label = t(remove ? "accounts.remove" : "accounts.signOut");
   const run = async () => {
     setConfirming(false);
@@ -345,9 +352,7 @@ function EngineAccountAction({ instance, action, cli = false, removeBody = "acco
     setError(null);
     try {
       const path = `/api/instances/${encodeURIComponent(instance.instanceId)}${remove ? "" : "/auth/sign-out"}`;
-      const { instances } = await api(path, { method: remove ? "DELETE" : "POST" });
-      if (Array.isArray(instances)) dispatch({ type: "instances", instances });
-      else await refreshInstances();
+      await showInstances(await api(path, { method: remove ? "DELETE" : "POST" }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -372,7 +377,7 @@ function EngineAccountAction({ instance, action, cli = false, removeBody = "acco
 }
 
 function AntigravityAddAccount({ source }: { source: InstanceInfo }) {
-  const { state } = useStore();
+  const state = useStoreSelector((s) => ({ instances: s.instances }), sameFields);
   const [addedId, setAddedId] = useState<string | null>(null);
   const added = addedId ? state.instances.find((instance) => instance.instanceId === addedId && instance.snapshot.authenticated !== true) : undefined;
   return <>
@@ -406,6 +411,7 @@ function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: 
       {/* The setup panel that first said so is gone once the engine is Ready. */}
       {engineReady(instance) && <AppCopyNotice instance={instance} className="mt-3" />}
       {instance.snapshot.update && <EngineUpdateNotice update={instance.snapshot.update} instance={instance} className="mt-3" quiet />}
+      <AntigravitySwitchCli instance={instance} />
       {instance.snapshot.warning && <EngineWarningNotice warning={instance.snapshot.warning} className="mt-3" />}
       {engineReady(instance) && instance.snapshot.authenticated === true && (
         instance.authentication?.method === "device-code"
@@ -421,7 +427,7 @@ function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: 
       {instance.freeUpSpace && <AntigravityFreeSpace instance={instance} />}
       {instance.driverKind === "antigravityAgent" && (
         <div className="mt-3 space-y-3">
-          {instance.snapshot.authenticated && <p className="break-words text-[12px] text-ink-secondary">{instance.snapshot.account?.email ?? t("engineSetup.antigravity.emailUnavailable")}</p>}
+          {instance.snapshot.authenticated && <p className="break-words text-[12px] text-ink-secondary">{instance.snapshot.account?.email ?? t("engineSetup.antigravity.signedInGoogle")}</p>}
           <AntigravityAddAccount source={instance} />
           {instance.snapshot.authenticated === true && instance.authentication?.signOut === true && <EngineAccountAction instance={instance} action="signOut" />}
           {instance.instanceId.startsWith("antigravity-") && <EngineAccountAction instance={instance} action="remove" />}
@@ -466,17 +472,48 @@ function ProviderRow({ instance, ready, open, onToggle, compact, children }: {
   </>;
 }
 
-function SimpleEngines({ rows, isReady, renderEngine, more }: {
+const GOOGLE_MARK = { driverKind: "openai-compat", icon: { kind: "preset", preset: "google" } } as const;
+/** Google AI Studio has no engine of its own: its Gemini API key adds an OpenAI-compatible server at Google's address,
+ * whose own row takes this one's place once it is added. */
+function GeminiProviderRow({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return <>
+    <div data-simple-engine="google-ai-studio" className="flex min-h-16 items-center gap-3 px-4 py-3">
+      <SettingsMark><InstanceProviderMark instance={GOOGLE_MARK} size={18} subtle /></SettingsMark>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="truncate text-[14px] leading-5 text-ink">{t("geminiServer.title")}</span>
+        <span className="truncate text-[13px] leading-[18px] text-ink-secondary"><StatusDot tone={null} />{`${t("settings.ai.notSetUp")} · ${t("settings.ai.needsKey")}`}</span>
+      </span>
+      <button type="button" aria-expanded={open} className="ui-button ml-3 shrink-0" onClick={onToggle}>
+        {t(open ? "common.close" : "settings.simple.ai.setUp")}
+      </button>
+    </div>
+    {open && <div data-provider-fold="google-ai-studio" className="pb-4 pl-[60px] pr-4 pt-3"><GeminiServer /></div>}
+  </>;
+}
+
+function SimpleEngines({ rows, isReady, renderEngine, more, accountsOnly = false, offerGemini = false, offerModelgo = false }: {
   rows: InstanceInfo[];
   isReady: (instance: InstanceInfo) => boolean;
   renderEngine: (instance: InstanceInfo, bare?: boolean) => ReactNode;
   more: { id: string; open: boolean; onToggle: () => void };
+  /** The chat's sign-in card: every account row in view, no fold and no hidden providers. */
+  accountsOnly?: boolean;
+  /** Offer the Google AI Studio row: no Gemini server is added yet and this workspace can add one. */
+  offerGemini?: boolean;
+  /** The sponsor's provider sits in the main list, among its first three rows, where it may be offered (modelgoOfferable). */
+  offerModelgo?: boolean;
 }) {
   const [opened, setOpened] = useState<string | null>(null);
   // A hidden provider is gone from the instance list, so without these rows nothing in Settings brings it back.
-  const hidden = useHiddenProviders();
-  const featured = rows.filter((instance) => isReady(instance) || instance.authentication !== undefined);
-  const others = rows.filter((instance) => !featured.includes(instance));
+  const allHidden = useHiddenProviders(), hidden = accountsOnly ? [] : allHidden;
+  const featured = rows.filter((instance) => accountsOnly || isReady(instance) || instance.authentication !== undefined || hasGeminiServer([instance]));
+  const modelgo = offerModelgo && !accountsOnly ? rows.find((instance) => instance.driverKind === "modelgo") : undefined;
+  const others = rows.filter((instance) => !featured.includes(instance) && instance !== modelgo);
+  // A hidden Gemini server comes back through its own hidden row; adding another would only make a second one.
+  const gemini = offerGemini && !hidden.some((provider) => provider.driverKind === "openai-compat" && provider.displayName === GEMINI_PRESET.name);
+  const main = sponsorRowRaised<InstanceInfo | "google-ai-studio">([...featured, ...(gemini ? ["google-ai-studio" as const] : []),
+    ...(modelgo && !featured.includes(modelgo) ? [modelgo] : [])], modelgo, (entry) => entry !== "google-ai-studio" && entry.driverKind === "cursorAgent");
+  const folded = others.length + hidden.length;
   const row = (instance: InstanceInfo, compact: boolean) => {
     const open = opened === instance.instanceId;
     return <ProviderRow key={instance.instanceId} instance={instance} ready={isReady(instance)} open={open} compact={compact}
@@ -485,9 +522,10 @@ function SimpleEngines({ rows, isReady, renderEngine, more }: {
   return (
     <SettingsGroup label={t("settings.ai.providers")} actions={<RefreshEngines />}>
       <SettingsRows icons>
-        {featured.map((instance) => row(instance, false))}
-        {others.length + hidden.length > 0 && (
-          <SettingsFoldRow id={more.id} title={t("settings.ai.moreProviders")} value={String(others.length + hidden.length)} open={more.open} onToggle={more.onToggle}
+        {main.map((entry) => entry !== "google-ai-studio" ? row(entry, false)
+          : <GeminiProviderRow key={entry} open={opened === entry} onToggle={() => setOpened(opened === entry ? null : entry)} />)}
+        {folded > 0 && (
+          <SettingsFoldRow id={more.id} title={t("settings.ai.moreProviders")} value={String(folded)} open={more.open} onToggle={more.onToggle}
             leading={<span aria-hidden="true" />}>
             {others.map((instance) => row(instance, true))}
             <HiddenProviderRows hidden={hidden} />
@@ -498,12 +536,8 @@ function SimpleEngines({ rows, isReady, renderEngine, more }: {
   );
 }
 
-export function EnginesSettings({ simple = false, more }: { simple?: boolean; more?: { id: string; open: boolean; onToggle: () => void } }) {
-  const { state } = useStore();
-  // Leaving Settings ends the "now uses the copy OpenMausBot installed" lines.
-  useEffect(() => forgetAppCopySwitches, []);
-  const listed = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable" || isApiKeyEngine(i) || i.claudeEndpoint !== undefined || i.claudeBedrock !== undefined || i.codexEndpoint !== undefined);
-  // A provider's accounts share one card, which takes the place of its first account.
+/** A provider's accounts share one card, which takes the place of its first account. */
+function groupedAccounts(listed: InstanceInfo[]) {
   const groups = new Map<AccountGroup, InstanceInfo[]>();
   for (const instance of listed) {
     const group = accountGroupOf(instance);
@@ -513,7 +547,30 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
     const group = accountGroupOf(instance);
     return group && groups.get(group)?.[0] === instance ? group : null;
   };
-  const rows = listed.filter((instance) => !accountGroupOf(instance) || groupOf(instance));
+  return { groups, groupOf, rows: listed.filter((instance) => !accountGroupOf(instance) || groupOf(instance)) };
+}
+
+/** The chat's AI sign-in card: Simple Providers with only the accounts a person signs in to (Claude, ChatGPT or Codex,
+ * Antigravity), for an owner or admin. */
+export function AiSignInSettings() {
+  const state = useStoreSelector((s) => ({ instances: s.instances }), sameFields);
+  const { groups, groupOf, rows } = groupedAccounts(state.instances.filter((instance) => accountGroupOf(instance) !== null || (instance.driverKind === "antigravityAgent" && !instance.readOnly)));
+  const isReady = (instance: InstanceInfo) => { const group = groupOf(instance); return group ? accountsReady(groups.get(group)!) : engineReady(instance); };
+  const renderEngine = (instance: InstanceInfo, bare = false) => {
+    const group = groupOf(instance);
+    return group ? <AccountsCard group={group} accounts={groups.get(group)!} bare={bare} /> : <EngineRow instance={instance} bare={bare} />;
+  };
+  return <AdminOnly><div data-ai-sign-in="">
+    <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} accountsOnly more={{ id: "ai-sign-in-more", open: false, onToggle: () => {} }} />
+  </div></AdminOnly>;
+}
+
+export function EnginesSettings({ simple = false, more }: { simple?: boolean; more?: { id: string; open: boolean; onToggle: () => void } }) {
+  const state = useStoreSelector((s) => ({ instances: s.instances, policy: s.config?.managedPolicy }), sameFields);
+  // Leaving Settings ends the "now uses the copy OpenMausBot installed" lines.
+  useEffect(() => forgetAppCopySwitches, []);
+  const listed = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable" || isApiKeyEngine(i) || i.claudeEndpoint !== undefined || i.claudeBedrock !== undefined || i.codexEndpoint !== undefined);
+  const { groups, groupOf, rows } = groupedAccounts(listed);
   // A hidden ordinary Claude instance takes its card, and the endpoint section inside it, away. A hosted
   // workspace lists every engine read-only and refuses instance changes, so there the section has no Add.
   const hostedWorkspace = rows.length > 0 && rows.every((instance) => instance.readOnly);
@@ -529,7 +586,8 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
   };
 
   if (simple && more) return <>
-    <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} />
+    <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} offerGemini={!hostedWorkspace && !hasGeminiServer(state.instances)}
+      offerModelgo={modelgoOfferable(state.policy)} />
     {orphanEndpoints && <div className="px-4"><ClaudeEndpoints /><ClaudeBedrockEndpoints /></div>}
     {orphanCodexEndpoints && <div className="px-4"><CodexEndpoints /></div>}
   </>;
@@ -543,7 +601,7 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
         </div>
         <RefreshEngines />
       </div>
-      <EngineSections instances={rows} isReady={isReady} renderEngine={renderEngine} />
+      <EngineSections instances={rows} isReady={isReady} renderEngine={renderEngine} offerModelgo={modelgoOfferable(state.policy)} />
       {orphanEndpoints && <div className="px-4"><ClaudeEndpoints /><ClaudeBedrockEndpoints /></div>}
       {orphanCodexEndpoints && <div className="px-4"><CodexEndpoints /></div>}
       <HiddenEngines />

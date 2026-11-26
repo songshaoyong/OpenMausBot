@@ -8,6 +8,7 @@ import { peerProvenanceAuthor, type WorkOrigin } from "./peer-provenance.ts";
 import type { ResolvedSender, SteerQueueReason } from "../shared/wire.ts";
 import type { Message } from "./store.ts";
 import type { UsageTrigger } from "./usage-ledger.ts";
+import { BOT_TEXT_MESSAGE_INDEXES_SQL } from "./message-db-bot-text-indexes.ts";
 import { ensureMemoryIndex } from "./message-db-memory-index.ts";
 import { cjkSearchText, cjkTokenParts, ensureSearchIndex, ftsPhrase, hasCjk, withoutSearchMarks } from "./cjk-search.ts";
 import { attentionSelect } from "./message-db-attention.ts";
@@ -24,7 +25,7 @@ const CARD_KINDS = "kind IN ('secret', 'signin', 'connector')";
 const FAILED_CALL = "kind = 'activity' AND instr(json, '\"ok\":false') > 0";
 /** The rows that order the thread list and the time each one counts at. SQLite uses messages_thread_order only for a
  * statement whose WHERE and MAX repeat these texts exactly. */
-const ORDERING_ROW = "((role = 'user' AND json_extract(json, '$.peerAsk') IS NULL) OR (role = 'bot' AND kind = 'text' AND (json_extract(json, '$.turnTerminal') = 1 OR json_extract(json, '$.turnId') IS NULL)))";
+export const ORDERING_ROW = "((role = 'user' AND json_extract(json, '$.peerAsk') IS NULL) OR (role = 'bot' AND kind = 'text' AND (json_extract(json, '$.turnTerminal') = 1 OR json_extract(json, '$.turnId') IS NULL)))";
 const ORDERING_AT = "COALESCE(json_extract(json, '$.turnCompletedAt'), at)";
 
 let handle: DatabaseSync | null = null;
@@ -59,11 +60,10 @@ function open(): DatabaseSync {
       PRIMARY KEY (thread_id, id)
     );
     CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
-    -- at is not part of the primary key, so newest-per-thread reads cannot
-    -- walk these rows in time order on messages_thread. Created on every
-    -- open, including a database that already has messages.
+    -- The primary key has no time column, so newest-per-thread reads need this index.
     CREATE INDEX IF NOT EXISTS messages_thread_at ON messages(thread_id, at);
     -- Partial, so no other query's plan can move onto them: only a statement that repeats the WHERE may use one.
+    ${BOT_TEXT_MESSAGE_INDEXES_SQL}
     CREATE INDEX IF NOT EXISTS messages_thread_order ON messages(thread_id, ${ORDERING_AT}) WHERE ${ORDERING_ROW};
     CREATE INDEX IF NOT EXISTS messages_work_at ON messages(kind, at) WHERE ${WORK_KINDS};
     CREATE INDEX IF NOT EXISTS messages_cards_at ON messages(kind, at) WHERE ${CARD_KINDS};
@@ -370,11 +370,14 @@ export interface ThreadRows {
   activeLeafId: string | null;
 }
 
+export function readStoredActiveLeaf(threadId: string): string | null {
+  return (prepared(ACTIVE_LEAF).get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id ?? null;
+}
+
 export function readThread(threadId: string, legacyFile: string): ThreadRows {
   const rows = prepared("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid").all(threadId) as Array<{ json: string }>;
   if (rows.length) {
-    const state = prepared(ACTIVE_LEAF).get(threadId) as { active_leaf_id: string | null } | undefined;
-    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null };
+    return { messages: rows.map(rowToMessage), activeLeafId: readStoredActiveLeaf(threadId) };
   }
   return importLegacy(threadId, legacyFile);
 }
@@ -388,16 +391,16 @@ export interface ThreadTailRows extends ThreadRows {
   hasMore?: boolean;
 }
 
+export function decodeMessagePage(rows: Array<{ json: string }>, limit: number): { messages: Message[]; hasMore: boolean } {
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.length = limit;
+  return { messages: rows.reverse().map(rowToMessage), hasMore };
+}
+
 export function readThreadTail(threadId: string, legacyFile: string, limit: number): ThreadTailRows {
   const rows = prepared("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?").all(threadId, limit + 1) as Array<{ json: string }>;
-  if (rows.length) {
-    const hasMore = rows.length > limit;
-    if (hasMore) rows.length = limit;
-    rows.reverse();
-    const state = prepared(ACTIVE_LEAF).get(threadId) as { active_leaf_id: string | null } | undefined;
-    return { messages: rows.map(rowToMessage), activeLeafId: state?.active_leaf_id ?? null, hasMore };
-  }
-  return importLegacy(threadId, legacyFile);
+  if (!rows.length) return importLegacy(threadId, legacyFile);
+  return { ...decodeMessagePage(rows, limit), activeLeafId: readStoredActiveLeaf(threadId) };
 }
 
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {
@@ -547,12 +550,12 @@ export function attentionRows(since: number): AttentionRow[] {
 }
 
 /** Every card still open, oldest first, whenever it was asked. */
-export function openCardRows(): Array<{ threadId: string; id: string; at: number; card: string | null; fromBotId: string | null }> {
+export function openCardRows(): Array<{ threadId: string; id: string; at: number; card: string | null; fromBotId: string | null; copyOf: string | null }> {
   return db().prepare(
-    `SELECT thread_id AS threadId, id, at, json_extract(json, '$.card') AS card, json_extract(json, '$.from.botId') AS fromBotId FROM messages INDEXED BY messages_work_at WHERE ${WORK_KINDS} AND kind = 'options' ` +
+    `SELECT thread_id AS threadId, id, at, json_extract(json, '$.card') AS card, json_extract(json, '$.from.botId') AS fromBotId, json_extract(json, '$.automation.copyOf') AS copyOf FROM messages INDEXED BY messages_work_at WHERE ${WORK_KINDS} AND kind = 'options' ` +
     "AND json_extract(json, '$.card.requestId') IS NOT NULL AND json_extract(json, '$.card.answered') IS NULL AND coalesce(json_extract(json, '$.card.dismissed'), 0) = 0 " +
     "AND coalesce(json_extract(json, '$.card.expired'), 0) = 0 AND json_extract(json, '$.helperIntro') IS NULL AND json_extract(json, '$.inbox') IS NULL ORDER BY at",
-  ).all() as Array<{ threadId: string; id: string; at: number; card: string | null; fromBotId: string | null }>;
+  ).all() as Array<{ threadId: string; id: string; at: number; card: string | null; fromBotId: string | null; copyOf: string | null }>;
 }
 
 /** The conversations with a card asked since `since` that has not been answered, oldest first; the caller reads each card. */
@@ -899,20 +902,22 @@ export interface ThreadLatest {
   head: string;
 }
 
+/** CROSS JOIN pins the order: the list, then a seek in each thread's bot text, then the primary key (thread_id, id). `id` alone has no index. */
+export const LATEST_SAID_BY_BOT_SQL =
+  "WITH latest(thread_id, id) AS MATERIALIZED (" +
+  "SELECT j.value, (SELECT m2.id FROM messages m2 " +
+  "WHERE m2.thread_id = j.value AND m2.kind = 'text' AND m2.role = 'bot' AND m2.text IS NOT NULL AND m2.at >= ? " +
+  "AND (json_extract(m2.json, '$.from.botId') IS NULL OR json_extract(m2.json, '$.from.botId') = ?) " +
+  "ORDER BY m2.at DESC LIMIT 1) FROM json_each(?) j) " +
+  "SELECT m.thread_id, m.id, m.at, substr(m.text, 1, 400) AS head " +
+  "FROM latest CROSS JOIN messages m ON m.thread_id = latest.thread_id AND m.id = latest.id " +
+  "WHERE latest.id IS NOT NULL ORDER BY m.at DESC LIMIT ?";
+
 export function latestSaidByBot(threadIds: readonly string[], botId: string, since: number, limit = 20): ThreadLatest[] {
   if (!threadIds.length) return [];
-  const placeholders = threadIds.map(() => "?").join(", ");
   const rows = db()
-    .prepare(
-      "SELECT thread_id, id, at, head FROM (" +
-        "SELECT m.thread_id, m.id, m.at, substr(m.text, 1, 400) AS head, " +
-        "ROW_NUMBER() OVER (PARTITION BY m.thread_id ORDER BY m.at DESC) AS rn " +
-        "FROM messages m " +
-        `WHERE m.kind = 'text' AND m.role = 'bot' AND m.text IS NOT NULL AND m.at >= ? AND m.thread_id IN (${placeholders}) ` +
-        "AND (json_extract(m.json, '$.from.botId') IS NULL OR json_extract(m.json, '$.from.botId') = ?)" +
-        ") WHERE rn = 1 ORDER BY at DESC LIMIT ?",
-    )
-    .all(since, ...threadIds, botId, limit) as Array<{ thread_id: string; id: string; at: number; head: string }>;
+    .prepare(LATEST_SAID_BY_BOT_SQL)
+    .all(since, botId, JSON.stringify([...new Set(threadIds)]), limit) as Array<{ thread_id: string; id: string; at: number; head: string }>;
   return rows.map((row) => ({
     threadId: row.thread_id,
     messageId: row.id,

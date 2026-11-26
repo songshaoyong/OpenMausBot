@@ -80,19 +80,19 @@ beforeEach(() => {
 });
 
 describe("ChatMoreMenu, the round ⋯ for the bot panel", () => {
-  it("is a round 32px button labelled More, on the raised surface in Simple mode", () => {
+  it("is a round 36px button labelled More, on the raised surface in Simple mode", () => {
     const menu = menuOf(createElement(ChatMoreMenu, { bot }));
     expect(menu.ariaLabel).toBe("More");
     expect(menu.placement).toBeUndefined();
     expect(menu.trigger).toContain('data-testid="chat-more"');
-    expect(menu.trigger).toMatch(/class="[^"]*\bsize-8\b[^"]*\brounded-full\b[^"]*\bbg-composer\b[^"]*\bring-inset\b/);
+    expect(menu.trigger).toMatch(/class="[^"]*\bsize-9\b[^"]*\brounded-full\b[^"]*\bbg-composer\b[^"]*\bring-inset\b/);
     fixture.advanced = true;
-    expect(menuOf(createElement(ChatMoreMenu, { bot })).trigger).toMatch(/class="[^"]*\bsize-8\b[^"]*\brounded-full\b[^"]*\bbg-raised\/50\b/);
+    expect(menuOf(createElement(ChatMoreMenu, { bot })).trigger).toMatch(/class="[^"]*\bsize-9\b[^"]*\brounded-full\b[^"]*\bbg-raised\/50\b/);
   });
 
   it("offers threads in Simple mode, and Usage and the Inspector unlocked", () => {
     const menu = menuOf(createElement(ChatMoreMenu, { bot }));
-    expect(keys(menu.items)).toEqual(["find", "new-thread", "threads", "start-fresh", "copy", "download", "activity", "inspector"]);
+    expect(keys(menu.items)).toEqual(["find", "new-thread", "threads", "start-fresh", "as-template", "copy", "download", "activity", "inspector"]);
     for (const item of menu.items) {
       expect(item.disabled, item.key).toBeFalsy();
       expect(item.heading ?? "", item.key).not.toBe("In Advanced mode");
@@ -115,21 +115,33 @@ describe("ChatMoreMenu, the round ⋯ for the bot panel", () => {
     expect(menuOf(createElement(ChatMoreMenu, { bot: fresh })).items.find((one) => one.key === "start-fresh")!.disabled).toBe(true);
   });
 
-  it("starts a new thread with the bot", () => {
+  it("starts a new thread with the bot and displays the platform shortcut hint", () => {
+    const win = globalThis.window as { ogb?: { platform?: string } };
+    try {
+      for (const [platform, expected] of [["darwin", "⌘ ⇧ N"], ["win32", "Ctrl Shift N"], ["linux", "Ctrl Shift N"]] as const) {
+        win.ogb = { platform };
+        const menu = menuOf(createElement(ChatMoreMenu, { bot }));
+        const newThread = menu.items.find((item) => item.key === "new-thread")!;
+        expect(renderToStaticMarkup(createElement("div", null, newThread.trailing))).toContain(expected);
+      }
+    } finally {
+      delete win.ogb;
+    }
     const menu = menuOf(createElement(ChatMoreMenu, { bot }));
     menu.items.find((item) => item.key === "new-thread")!.onSelect();
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "newTask", botId: "pepper" });
   });
 
-  it("lists the bot's threads newest first, without routine runs, marks the open one and opens another", () => {
+  it("lists the bot's main thread first, then newest first, without routine runs, marks the open one and opens another", () => {
     const threads = menuOf(createElement(ChatMoreMenu, { bot })).items.find((item) => item.key === "threads")!;
     expect(threads).toMatchObject({ label: "All threads", value: "3" });
     expect(threads.submenu!.map((item) => [item.label, Boolean(item.active)])).toEqual([
+      ["Our chat", false],
       ["Trip plan", true],
       ["Untitled chat", false],
-      ["Our chat", false],
     ]);
-    threads.submenu![2].onSelect();
+    expect(threads.submenu!.map((item) => renderToStaticMarkup(createElement("div", null, item.trailing)).includes('aria-label="Main thread"'))).toEqual([true, false, false]);
+    threads.submenu![0].onSelect();
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "switchTask", botId: "pepper", threadId: "main" });
   });
 
@@ -142,7 +154,7 @@ describe("ChatMoreMenu, the round ⋯ for the bot panel", () => {
 
   it("leaves All threads out while the bot has one thread", () => {
     const single = { ...bot, threadId: "main", tasks: [task("main", "Our chat", 1), task("routine", "Morning digest", 5, { routineRunId: "run-1" })] };
-    expect(keys(menuOf(createElement(ChatMoreMenu, { bot: single })).items)).toEqual(["find", "new-thread", "start-fresh", "copy", "download", "activity", "inspector"]);
+    expect(keys(menuOf(createElement(ChatMoreMenu, { bot: single })).items)).toEqual(["find", "new-thread", "start-fresh", "as-template", "copy", "download", "activity", "inspector"]);
     expect(keys(menuOf(createElement(ChatMoreMenu, { bot: { ...bot, tasks: undefined } })).items)).not.toContain("threads");
   });
 
@@ -191,9 +203,9 @@ describe("the phone header's ⋯", () => {
 });
 
 describe("ChatShareMenu, the bot panel's Share", () => {
-  it("copies or downloads the conversation, in those words", () => {
+  it("shares the bot as a template, or copies or downloads the conversation, in those words", () => {
     const menu = menuOf(createElement(ChatShareMenu, { bot, className: "" }));
-    expect(menu.items.map((item) => [item.key, item.label])).toEqual([["copy", "Copy conversation"], ["download", "Download conversation"]]);
+    expect(menu.items.map((item) => [item.key, item.label])).toEqual([["as-template", "Share as template"], ["copy", "Copy conversation"], ["download", "Download conversation"]]);
   });
 });
 
@@ -201,11 +213,11 @@ describe("ChatHeaderMenu, Advanced mode's header ⋯", () => {
   it("keeps main's items, trigger and hover menu below the header", () => {
     fixture.advanced = true;
     const menu = menuOf(createElement(ChatHeaderMenu, { bot }));
-    expect(keys(menu.items)).toEqual(["find", "start-fresh", "copy", "download", "activity", "inspector"]);
+    expect(keys(menu.items)).toEqual(["find", "start-fresh", "as-template", "copy", "download", "activity", "inspector"]);
     expect(menu.items.find((item) => item.key === "inspector")).toMatchObject({ separatorBefore: true });
     expect(menu.items.every((item) => !item.disabled && item.heading !== "In Advanced mode")).toBe(true);
     expect(menu).toMatchObject({ placement: "below", openOnHover: true });
-    expect(menu.trigger).toMatch(/data-testid="chat-more" class="flex size-8 items-center justify-center rounded-full /);
+    expect(menu.trigger).toMatch(/data-testid="chat-more" class="flex size-9 items-center justify-center rounded-full /);
   });
 
   it("has no thread items even if rendered by ChatMoreMenu in Advanced mode", () => {

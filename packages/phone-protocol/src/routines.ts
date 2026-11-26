@@ -109,6 +109,13 @@ export type RoutineRetryCause = "stalled" | "restarted" | "rate_limited" | "prov
  * not been acknowledged. */
 export const ROUTINE_PROBLEM_STATUSES: readonly RoutineRunStatus[] = ["failed", "missed"];
 
+/** The limits the server applies to the runs that set none of their own: the minutes of work a bot's run may do,
+ * and the same for a room goal's run, which stays running across every member's turn. */
+export interface RoutineRunLimits {
+  runMinutes: number;
+  goalMinutes: number;
+}
+
 /** Minutes of work a run may do when its routine sets no limit of its own: a bot's run, and a room goal's run, which
  * stays running across every member's turn. */
 export const ROUTINE_RUN_LIMIT_MINUTES = 180;
@@ -230,6 +237,9 @@ export interface RoutineRun {
   partial?: boolean;
   /** Set when the run used its one automatic second start, and why. */
   retried?: RoutineRetryCause;
+  /** A failed run that only the owner's AI account could have let through (signed out, out of credit, a usage limit, an
+   * engine to set up): it spent nothing, so it does not count towards spacing its routine out. */
+  ownerCause?: "signed_out" | "credits" | "usage_limit" | "setup";
   /** Concise, redacted question or approval reason while status is waiting,
    * or why a queued run starts later. */
   attention?: string;

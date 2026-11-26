@@ -4,22 +4,30 @@
 //   FAKE_PI_MODE  happy (default) | tooluse | priced | priced-stop | permission | interleave | question-select | question-input
 //     | turn-error | no-models | exit-early | compaction | compaction-recovery
 //     | compaction-recovery-upstream | prompt-reject | omp-chunk
+//     | omp-start-fail (omp accepts the prompt, then fails it before the agent starts: prompt_result agentInvoked false)
 //     | session-slow (answers new_session after FAKE_PI_SESSION_DELAY_MS, default 800, and dumps {sessionReplied})
 //   FAKE_PI_MODELS  provider/model pairs (default "ollama-cloud/glm-5.2,openai/gpt-4o")
 //   FAKE_PI_DUMP  path to append {argv, env} JSON to
+//   FAKE_PI_SESSION_FILE_IN_STATE_ONLY  new_session/switch_session return only {cancelled}, like official pi;
+//     sessionFile is available from get_state
+//   FAKE_PI_PERSIST_SESSION  persist prompts to disk and load them on switch_session
 //   FAKE_PI_STEER_REFUSE  answer a steer with an explicit success:false
 //   FAKE_PI_STEER_OUT_OF_ORDER  hold the first steer until a second arrives, then refuse the first and accept the second
+//   FAKE_PI_CONTEXT_WINDOW  positive token count attached to every listed model
 
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { playStreamScript, streamScript, type StreamScript } from "./stream-script.ts";
 
 const mode = process.env.FAKE_PI_MODE ?? "happy";
+const listedWindow = Number(process.env.FAKE_PI_CONTEXT_WINDOW);
+const modelWindow = Number.isFinite(listedWindow) && listedWindow > 0 ? { contextWindow: listedWindow } : {};
 const modelPairs = (process.env.FAKE_PI_MODELS ?? "ollama-cloud/glm-5.2,openai/gpt-4o")
   .split(",")
   .filter(Boolean)
   .map((pair) => {
     const [provider, id] = pair.split("/");
-    return { provider: provider ?? "x", id: id ?? "m", name: id ?? "m" };
+    return { provider: provider ?? "x", id: id ?? "m", name: id ?? "m", ...modelWindow };
   });
 
 const argv = process.argv.slice(2);
@@ -46,6 +54,7 @@ if (process.env.FAKE_PI_DUMP) {
           (k) => process.env[k] !== undefined,
         ),
         mcpConfig,
+        agentDir: process.env.PI_CODING_AGENT_DIR ?? null,
       }) + "\n",
     );
   } catch {}
@@ -358,8 +367,15 @@ function handle(cmd: any) {
         return;
       }
       sessionCounter += 1;
-      currentSessionFile = `/fake/pi-session-${sessionCounter}.json`;
-      const sessionReply = { type: "response", command: "new_session", success: true, data: { sessionId: `s-${sessionCounter}`, sessionFile: currentSessionFile } };
+      currentSessionFile = join(argv.includes("--session-dir") ? argv[argv.indexOf("--session-dir") + 1]! : "/fake", `pi-session-${process.pid}-${sessionCounter}.json`);
+      if (process.env.FAKE_PI_PERSIST_SESSION) writeFileSync(currentSessionFile, "[]");
+      const sessionData = process.env.FAKE_PI_SESSION_FILE_IN_STATE_ONLY
+        ? { cancelled: false }
+        : { sessionId: `s-${sessionCounter}`, sessionFile: currentSessionFile };
+      const sessionReply = { type: "response", command: "new_session", success: true, data: sessionData };
+      if (process.env.FAKE_PI_DUMP) {
+        try { appendFileSync(process.env.FAKE_PI_DUMP, JSON.stringify({ rpc: "new_session" }) + "\n"); } catch {}
+      }
       if (mode !== "session-slow") {
         send(sessionReply);
         return;
@@ -370,12 +386,25 @@ function handle(cmd: any) {
       }, Number(process.env.FAKE_PI_SESSION_DELAY_MS ?? 800));
       return;
     case "switch_session":
+      if (mode === "session-cancelled") {
+        send({ type: "response", command: "switch_session", success: true, data: { cancelled: true } });
+        return;
+      }
       if (mode === "session-error") {
         send({ type: "response", command: "switch_session", success: false, error: "fake pi: session unavailable" });
         return;
       }
       currentSessionFile = cmd.sessionPath ?? currentSessionFile;
-      send({ type: "response", command: "switch_session", success: true, data: { sessionId: "s-resumed", sessionFile: currentSessionFile } });
+      if (process.env.FAKE_PI_PERSIST_SESSION && currentSessionFile && process.env.FAKE_PI_DUMP) {
+        appendFileSync(process.env.FAKE_PI_DUMP, JSON.stringify({ loadedHistory: JSON.parse(readFileSync(currentSessionFile, "utf8")) }) + "\n");
+      }
+      const switchData = process.env.FAKE_PI_SESSION_FILE_IN_STATE_ONLY
+        ? { cancelled: false }
+        : { sessionId: "s-resumed", sessionFile: currentSessionFile };
+      if (process.env.FAKE_PI_DUMP) {
+        try { appendFileSync(process.env.FAKE_PI_DUMP, JSON.stringify({ rpc: "switch_session", sessionPath: currentSessionFile }) + "\n"); } catch {}
+      }
+      send({ type: "response", command: "switch_session", success: true, data: switchData });
       return;
     case "set_model": {
       if (process.env.FAKE_PI_DUMP) {
@@ -400,6 +429,10 @@ function handle(cmd: any) {
         send({ type: "response", command: "prompt", success: false, error: "fake pi: compaction in progress" });
         return;
       }
+      if (process.env.FAKE_PI_PERSIST_SESSION && currentSessionFile) {
+        const history = JSON.parse(readFileSync(currentSessionFile, "utf8"));
+        writeFileSync(currentSessionFile, JSON.stringify([...history, cmd.message]));
+      }
       if (process.env.FAKE_PI_DUMP) {
         try {
           appendFileSync(
@@ -409,6 +442,12 @@ function handle(cmd: any) {
         } catch {}
       }
       send({ type: "response", command: "prompt", success: true });
+      if (mode === "omp-start-fail") {
+        const error = "System prompt changed repeatedly during before_agent_start; original input was not delivered.";
+        send({ type: "response", command: "prompt", success: false, error });
+        send({ type: "prompt_result", agentInvoked: false, status: "error", error: { message: error, retryable: false }, sessionSettled: true });
+        return;
+      }
       if (streamScript(String(cmd.message ?? ""))) streamScriptTurn(streamScript(String(cmd.message ?? ""))!);
       else if (mode === "tooluse") streamToolTurn();
       else if (mode === "priced") streamPricedTurn();

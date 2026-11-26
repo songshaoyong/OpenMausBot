@@ -16,6 +16,7 @@ import {
   type PlanFetch,
   type PlanResponse,
 } from "./plan-usage.ts";
+import { chatgptAccountHome } from "./drivers/codex-account-home.ts";
 
 const SECRET = "plan-usage-fixture-secret";
 const NOW = 1_800_000_000_000;
@@ -171,6 +172,23 @@ describe("plan usage parsers", () => {
     ]);
     expect(parsed.models).toEqual([]);
     expect(JSON.stringify(parsed)).not.toContain(SECRET);
+  });
+
+  it("marks Codex credits only for a positive balance or an unlimited account", () => {
+    const flag = (credits: unknown) => parseCodexUsage({ plan_type: "plus", ...(credits === undefined ? {} : { credits }) }).codexCredits;
+    expect(flag({ has_credits: true, unlimited: false, balance: "12.50" })).toBe(true);
+    expect(flag({ has_credits: false, unlimited: true, balance: null })).toBe(true);
+    const odd = [
+      undefined, null, "yes", 1, [], {},
+      { has_credits: "true", unlimited: 1 }, { has_credits: null, unlimited: null },
+      { has_credits: false, unlimited: false, balance: "0" },
+      { has_credits: true, unlimited: false, balance: "0" },
+      { has_credits: true, balance: null },
+      { has_credits: true, balance: "abc" },
+      { has_credits: true, balance: true },
+      { has_credits: true, balance: "1,234.00" },
+    ];
+    for (const credits of odd) expect(flag(credits)).toBeUndefined();
   });
 
   it("keeps Codex model windows separate from the account plan", () => {
@@ -633,6 +651,28 @@ describe("plan usage fetcher", () => {
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(report.providers.map((row) => row.id)).toEqual(["codex"]);
+  });
+
+  it("reads each Cloud ChatGPT account's limits from its own Codex home, never the first account's", async () => {
+    const instances = {
+      codex: { driver: "codex" },
+      chatgpt: { driver: "codex", displayName: "ChatGPT plan", config: { authMode: "chatgpt-plan" } },
+      "chatgpt-work": { driver: "codex", displayName: "Work", config: { authMode: "chatgpt-plan" } },
+    };
+    const accounts = planAccountsFromInstances(instances, { OMB_CLOUD_ROLE: "home" });
+    expect(accounts).toEqual([
+      { id: "codex", name: "Codex", driver: "codex", environment: {} },
+      { id: "chatgpt", name: "ChatGPT plan", driver: "codex", environment: { CODEX_HOME: chatgptAccountHome("chatgpt") } },
+      { id: "chatgpt-work", name: "Work", driver: "codex", environment: { CODEX_HOME: chatgptAccountHome("chatgpt-work") } },
+    ]);
+    const tokens = new Map([
+      [join("/home/fixture/.codex", "auth.json"), "first-fixture"],
+      [join(chatgptAccountHome("chatgpt-work"), "auth.json"), "work-fixture"],
+    ]);
+    const reader = fileCredentialReader({ now: () => NOW, env: { HOME: "/home/fixture" },
+      readText: (path) => tokens.has(path) ? JSON.stringify({ tokens: { access_token: tokens.get(path) } }) : null });
+    expect(await Promise.all(accounts.map(async (account) => (await reader.read(account)).token)))
+      .toEqual(["first-fixture", null, "work-fixture"]);
   });
 
   it("reads every Claude instance's login with no setting, and none whose config sets usageMeter to false", async () => {

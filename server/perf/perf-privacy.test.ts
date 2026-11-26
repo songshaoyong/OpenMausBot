@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,10 +7,13 @@ import { createCloudHealth } from "../cloud-health.ts";
 import type { RuntimeEvent } from "../contracts.ts";
 import { buildDevsReport } from "../devs-report.ts";
 import type { StoreChange } from "../store.ts";
+import { createDiskUsage } from "./disk-usage.ts";
 import { createPerfHost, PERF_FILE } from "./perf-host.ts";
+import { createLaunchTimings, LAUNCH_CHILDREN, LAUNCH_FILE, LAUNCH_HOSTS, LAUNCH_MARKS, LAUNCH_SPANS } from "./launch-timings.ts";
 import { PERF_HEALTH_MAX_BYTES, perfHealth } from "./perf-report.ts";
+import { SETUP_STEPS } from "./setup-steps.ts";
 import { createProcessSampler, type ProcessList } from "./process-sampler.ts";
-import { createTurnTimings } from "./turn-timings.ts";
+import { createTurnTimings, RING_CAP } from "./turn-timings.ts";
 
 const START = 1_800_000_000_000;
 const SECRETS = [
@@ -130,6 +133,37 @@ describe("performance diagnostics carry no content", () => {
   });
 });
 
+describe("the storage report carries no names from the disk", () => {
+  it("rides the signed health report as `storage` and the owner's route with no seeded secret, though every file and folder is named after one", async () => {
+    const home = mkdtempSync(join(tmpdir(), "perf-storage-"));
+    dirs.push(home);
+    const data = join(home, ".openmausbot");
+    const named = (secret: string) => secret.replace(/[/\\:?]/g, "_");
+    for (const secret of SECRETS) {
+      for (const parent of [home, data, join(data, "workspaces", "bot_ok"), join(data, "workspaces", named(secret)), join(data, "browser", "profiles", named(secret))]) {
+        mkdirSync(join(parent, named(secret)), { recursive: true });
+        writeFileSync(join(parent, named(secret), named(secret)), secret);
+      }
+    }
+    const store = { onChange: () => () => {}, botByThread: () => null, bots: [] };
+    const bus = { subscribe: () => () => {} };
+    const disk = createDiskUsage({ roots: [{ path: home, scope: "home" }, { path: data, scope: "data" }], volume: home, timer: false, firstPassAfterMs: 0, now: () => START,
+      knownBot: (id) => id === "bot_ok" });
+    const perf = createPerfHost({ dataDir: data, timer: false, now: () => START, wholeMachine: true, bus, store, disk });
+    expect(perf.storage()).toMatchObject({ v: 1, at: null });
+    for (let index = 0; index < 1_000 && (disk.running() || disk.report().at === null); index++) await disk.tick();
+    const cloud = { store, bus, engines: () => [], dataDir: data, eventsDir: data, version: "0.1.160", image: undefined, connectors: () => null,
+      browser: () => ({ available: true, installing: false, interrupted: 0 }), now: () => START };
+    const report = createCloudHealth({ ...cloud, storage: perf.storage }).report(undefined);
+    expect(report.storage).toMatchObject({ v: 1, at: START, bots: [{ id: "bot_ok" }] });
+    expect(report.storage!.categories.reduce((sum, row) => sum + row.files, 0)).toBe(SECRETS.length * 5);
+    expect(leaks(JSON.stringify(report.storage))).toEqual([]);
+    expect(leaks(JSON.stringify(perf.storage()))).toEqual([]);
+    expect(createCloudHealth(cloud).report(undefined)).not.toHaveProperty("storage");
+    perf.stop();
+  });
+});
+
 describe("a tampered file read back", () => {
   it("passes nothing but checked fields: every string a secret, every key a trap", () => {
     const dir = mkdtempSync(join(tmpdir(), "perf-tampered-"));
@@ -155,6 +189,58 @@ describe("a tampered file read back", () => {
   });
 });
 
+describe("the launch record carries no content", () => {
+  const bad = SECRETS.join(" ");
+  const poisoned = (from: "main" | "page") => ({
+    from, launchId: "launch-0001", processStart: START, timeOrigin: START + 800, hidden: false,
+    appVersion: bad, platform: "/Users/ada/Projects/acme-merger/plan.md", arch: "ada@example.test", [bad]: bad, url: "https://intranet.acme.test/q?token=abc",
+    marks: { ready: 100, windowNavigated: 790, windowShown: 900, chatDrawn: 300, [bad]: 5, "/Users/ada/Projects/acme-merger/plan.md": 6, note: bad },
+    spans: { keychain: 9, [bad]: 4, "Ada's Claude": 2 },
+    children: [{ name: "/Users/ada/Projects/acme-merger/bin/lookup_customer --token sk-ant-api03-PRIVATEPRIVATEPRIVATE1234567890", ms: 30, cwd: "/Users/ada/Projects/acme-merger", args: [bad] },
+      { name: "Tallyspoon", ms: 4 }, { name: "ioreg", ms: 12, [bad]: bad }],
+    net: { other: { n: 2, ms: 40, urls: ["https://intranet.acme.test/q?token=abc"] }, "intranet.acme.test": { n: 1, ms: 9 }, [bad]: { n: 1, ms: 1 } },
+  });
+
+  it("the saved file, the copied text, the health field and the log hold none of the seeded secrets, whatever the app and the page post", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "perf-launch-privacy-"));
+    dirs.push(dir);
+    const logged: string[] = [];
+    const perf = createPerfHost({
+      dataDir: dir, timer: false, now: () => START + 5_000, wholeMachine: false, log: (line) => logged.push(line),
+      bus: { subscribe: () => () => {} }, store: { onChange: () => () => {}, botByThread: () => null },
+      launches: { launchId: "launch-0001", counts: () => ({ bots: 3, threads: 7 }),
+        server: () => ({ startedAt: START + 400, listeningAt: START + 700, children: poisoned("main").children, net: poisoned("main").net }) },
+    });
+    expect(perf.noteLaunch(poisoned("main"))).toEqual({ ok: true, complete: false });
+    expect(perf.noteLaunch(poisoned("page"))).toEqual({ ok: true, complete: true });
+    const saved = readFileSync(join(dir, LAUNCH_FILE), "utf8");
+    const text = perf.text(), health = JSON.stringify(perf.health());
+    expect(text).toContain("App launches (times from process start): 1 in the last 30 days");
+    expect(text).toContain("programs started: other 2x 34ms, ioreg 12ms, other (server) 2x 34ms, ioreg (server) 12ms");
+    expect(health).toContain('"launches":{');
+    for (const [where, body] of Object.entries({ saved, text, health, log: logged.join("\n") })) expect(leaks(body), where).toEqual([]);
+    const allowed = new Set<string>([...LAUNCH_MARKS, ...LAUNCH_SPANS, ...LAUNCH_CHILDREN, ...LAUNCH_HOSTS, "main", "server", "page", "darwin", "win32", "linux", "arm64", "x64", "ia32"]);
+    const strings: string[] = [];
+    JSON.stringify(JSON.parse(saved).ring, (_key, value) => { if (typeof value === "string") strings.push(value); return value; });
+    expect(strings.filter((value) => !allowed.has(value))).toEqual([]);
+  });
+
+  it("a tampered file read back passes nothing but checked fields", () => {
+    const dir = mkdtempSync(join(tmpdir(), "perf-launch-tampered-"));
+    dirs.push(dir);
+    const file = join(dir, LAUNCH_FILE);
+    writeFileSync(file, JSON.stringify({ v: 1, lastLaunchAt: bad, ring: [{ at: START, appVersion: bad, platform: bad, arch: bad, cold: bad, hidden: bad, bots: bad, threads: -4,
+      ms: { ready: 100, [bad]: 5, chatDrawn: bad }, spans: { keychain: 3, [bad]: 2 }, children: [{ name: bad, where: bad, n: 1, ms: 5 }, { name: bad, where: "main", n: 1, ms: 5 }, { name: "ioreg", where: "server", n: 2, ms: 9, extra: bad }],
+      net: { [bad]: { n: 1, ms: 1 }, other: { n: 1, ms: 2, extra: bad } }, parts: ["main", bad], extra: bad }],
+      days: [{ day: Math.floor(START / 86_400_000), launches: 2, cold: bad, phases: { chatDrawn: { counts: [bad], max: 1, sum: 1 }, [bad]: {} }, [bad]: bad }] }));
+    const timings = createLaunchTimings({ file, now: () => START });
+    expect(leaks(JSON.stringify({ recent: timings.recent(), stats: timings.stats() }))).toEqual([]);
+    expect(timings.recent()).toEqual([{ at: START, appVersion: null, platform: null, arch: null, cold: null, hidden: false, bots: 0, threads: 0, ms: { ready: 100 }, spans: { keychain: 3 },
+      children: [{ name: "other", where: "main", n: 1, ms: 5 }, { name: "ioreg", where: "server", n: 2, ms: 9 }], net: { other: { n: 1, ms: 2 } }, parts: ["main"] }]);
+    expect(timings.stats()).toMatchObject({ launches: 2, cold: 0, phases: {} });
+  });
+});
+
 describe("the perf field's size", () => {
   it("stays under PERF_HEALTH_MAX_BYTES with every part at its fullest", () => {
     let clock = START;
@@ -168,6 +254,7 @@ describe("the perf field's size", () => {
       for (let retry = 0; retry < 4; retry++) big.noteEvent({ eventId: "e", provider: "p", threadId, createdAt: "", turnId: `t${turn}`, type: "turn.retrying", attempt: retry, delayMs: 1000, reason: `reason_${(turn * 4 + retry) % 20}` });
       big.noteEvent({ eventId: "e", provider: `engine${turn % 20}`, threadId, createdAt: "", turnId: `t${turn}`, type: "runtime.error", message: "m", limit: (["engine", "model", "credits"] as const)[turn % 3] });
       clock += 1_234_567;
+      big.noteSetup(`thread_${turn + 1}`, Object.fromEntries(SETUP_STEPS.map((step, index) => [step, 1_234_567 + index])));
       if (turn < 250) big.noteEvent({ eventId: "e", provider: "p", threadId, createdAt: "", turnId: `t${turn}`, type: "turn.completed", ok: turn % 2 === 0 });
     }
     clock = START + 250 * 1_234_567;
@@ -176,11 +263,17 @@ describe("the perf field's size", () => {
       loop: { eluPct: 100, eluMaxPct: 100, driftP95Ms: 123_456, driftMaxMs: 1_234_567 } };
     const limits: EngineLimitsReport = { checkedAt: 0, engines: Array.from({ length: 20 }, (_, index) => ({ engine: `e${index}`, name: "n", driver: "claude" as const,
       window: "weekly" as const, usedPercent: 100, resetsAt: START + index, blocked: true, held: true })) };
-    const body = perfHealth({ hour: big.window(), day: big.day(), live: big.live(), limits, process: proc });
+    const launchTimings = createLaunchTimings({ now: () => clock, uptimeS: () => 1, launchId: "launch-0001" });
+    launchTimings.note({ from: "main", launchId: "launch-0001", processStart: clock - 600_000, appVersion: "0.1.170", platform: "darwin", arch: "arm64", hidden: true,
+      marks: Object.fromEntries(LAUNCH_MARKS.map((mark, index) => [mark, 123_456 + index])), spans: { keychain: 123_456, lease: 123_456 } });
+    const launches = { stats: launchTimings.stats(), recent: launchTimings.recent() };
+    const body = perfHealth({ hour: big.window(), day: big.day(), live: big.live(), limits, process: proc, launches });
     const bytes = JSON.stringify(body).length;
     console.log(`perf health, every part full: ${bytes} bytes (budget ${PERF_HEALTH_MAX_BYTES})`);
     expect(bytes).toBeLessThanOrEqual(PERF_HEALTH_MAX_BYTES);
     expect(body.h24.tools.length).toBeGreaterThan(0);
+    expect(Object.keys(body.h24.setup)).toHaveLength(7);
+    expect(Object.keys(body.h1.setup)).toHaveLength(7);
   });
 });
 
@@ -209,7 +302,7 @@ describe("the recorder's cost", () => {
     console.log(`recorder: ${perEventUs.toFixed(2)} µs per event over ${turns * (events.length + 2)} events; window()+day() ${reportMs.toFixed(2)} ms`);
     expect(perEventUs).toBeLessThan(50);
     expect(reportMs).toBeLessThan(50);
-    expect(timings.recent()).toHaveLength(200);
+    expect(timings.recent()).toHaveLength(RING_CAP);
     expect(timings.live()).toHaveLength(0);
   });
 });

@@ -14,6 +14,8 @@ export interface FakeOAuthOptions {
   noRegistration?: boolean;
   /** refuse to register a client for a redirect URI this matches */
   refuseRedirect?: (redirectUri: string) => boolean;
+  /** answer every registration with this status, JSON body and headers */
+  registerRefusal?: { status: number; body: unknown; headers?: Record<string, string> };
   /** answer every refresh with invalid_grant */
   rejectRefresh?: boolean;
   /** /authorize answers ?error=access_denied instead of a code */
@@ -32,6 +34,8 @@ export interface FakeOAuthOptions {
   preRegistered?: Record<string, string | null>;
   /** advertised token_endpoint_auth_methods_supported */
   tokenAuthMethods?: string[];
+  /** registration issues a secret with this method, whatever the client asked for, and the token endpoint requires it */
+  registerConfidential?: "client_secret_basic" | "client_secret_post";
   /** Require offline_access to issue a refresh token and advertise it only on the authorization server. */
   offlineAccess?: boolean;
 }
@@ -75,7 +79,7 @@ export async function startFakeOAuth(options: FakeOAuthOptions = {}): Promise<Fa
   let issuer = "";
   const clientAuths: FakeClientAuth[] = [];
   const fake: Partial<FakeOAuth> = { lastAuthorize: null, clientAuths, options };
-  const preRegistered = options.preRegistered ?? {};
+  const preRegistered = { ...options.preRegistered };
 
   /** The authenticated client, or null when its secret is missing or wrong (RFC 6749 §2.3: one method per request). */
   const authenticate = (req: IncomingMessage, form: URLSearchParams): string | null => {
@@ -133,9 +137,18 @@ export async function startFakeOAuth(options: FakeOAuthOptions = {}): Promise<Fa
       if (req.method === "POST" && url.pathname === "/register") {
         counts.register += 1;
         await options.beforeRegister?.();
+        if (options.registerRefusal) {
+          res.writeHead(options.registerRefusal.status, { "content-type": "application/json", ...options.registerRefusal.headers });
+          return res.end(JSON.stringify(options.registerRefusal.body));
+        }
         const body = JSON.parse(await readBody(req)) as { redirect_uris?: string[] };
         if (body.redirect_uris?.some((uri) => options.refuseRedirect?.(uri))) return json(res, 400, { error: "invalid_redirect_uri" });
         const clientId = `client_${counts.register}`;
+        if (options.registerConfidential) {
+          const secret = `secret_${randomBytes(8).toString("hex")}`;
+          preRegistered[clientId] = secret;
+          return json(res, 201, { client_id: clientId, client_secret: secret, token_endpoint_auth_method: options.registerConfidential, redirect_uris: body.redirect_uris });
+        }
         clients.add(clientId);
         return json(res, 201, { client_id: clientId, redirect_uris: body.redirect_uris });
       }

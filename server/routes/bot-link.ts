@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import type { createDialer } from "../bot-link/dial.ts";
 import type { BotLink } from "../bot-link/link.ts";
-import { FILE_PATH, PAIR_PATH, SEEN_MS, STATE_PATH, SYNC_PATH, fileWay, placeSchema, syncRequest } from "../bot-link/protocol.ts";
+import { BOTS_PATH, FILE_PATH, LEVEL_HEADER, PAIR_PATH, PROTOCOL_LEVEL, SEEN_MS, STATE_PATH, SYNC_PATH, fileWay, levelOf, placeSchema, syncRequest } from "../bot-link/protocol.ts";
 import { FILE_MAX_BYTES } from "../../shared/upload-limits.ts";
 import { answerAsleep } from "../cloud-power.ts";
 import type { RequestAuth } from "../request-auth.ts";
@@ -29,7 +29,8 @@ const origin = z.string().max(300).regex(/^https?:\/\/[^/\s]+$/u);
 const switchBody = z.union([
   z.object({ on: z.literal(true), origin, token: z.string().min(16).max(512), name, cloud: placeSchema, account: z.string().max(200).optional() }).strict(),
   z.object({ on: z.literal(false) }).strict(),
-  z.object({ cloud: z.enum(["asleep", "awake"]), origin }).strict(),
+  /** `heardAt`: when the app first heard "asleep" (this computer's clock), so a word older than the Cloud's own answers parks nothing. */
+  z.object({ cloud: z.enum(["asleep", "awake"]), origin, heardAt: z.number().int().nonnegative().optional() }).strict(),
 ]);
 const pairBody = z.object({ computer: placeSchema, name }).strict();
 
@@ -64,6 +65,8 @@ export interface BotLinkRouteDeps {
   /** The link was turned on here. */
   turnedOn?(): void;
   seenMs?: number;
+  /** What this place says its version reads; a test stands in for an older Cloud with it. */
+  level?: number;
 }
 
 export function createBotLinkRoutes(deps: BotLinkRouteDeps): RouteHandler {
@@ -89,10 +92,29 @@ export function createBotLinkRoutes(deps: BotLinkRouteDeps): RouteHandler {
     held.set(peer, done);
   });
   const state = () => ({ ...link.status(), ...(link.role() === "dialer" ? dialer.state() : {}) });
+  /** Turned off on a computer. The end is written down before the Cloud is asked, so a server stopped mid-way tells its
+   * Cloud later (when the app next says it is awake); a Cloud the app says sleeps is not woken to be told. */
+  const endHere = async () => {
+    const target = link.dial(), sleeping = dialer.state().asleep;
+    await dialer.stop();
+    link.turnOff(false);
+    if (target && !sleeping) await dialer.tellEnded(target.origin);
+  };
 
   return async ({ req, res, url, path, method, auth, json, readBody }) => {
-    if (path !== STATE_PATH && path !== PAIR_PATH && path !== SYNC_PATH && path !== FILE_PATH) return PASS;
+    if (path !== STATE_PATH && path !== PAIR_PATH && path !== SYNC_PATH && path !== FILE_PATH && path !== BOTS_PATH) return PASS;
     res.setHeader("cache-control", "no-store");
+
+    if (path === BOTS_PATH) {
+      req.resume();
+      if (!deps.local(auth)) return json(res, 403, { error: "Only the app on this computer lists its other places' bots." });
+      if (method !== "GET") return json(res, 405, { error: "method not allowed" });
+      // Names and looks only, as each place told this one: no message, address or sign-in.
+      return json(res, 200, { bots: link.linked().map(({ id, peer, place, kind, online, bot }) => ({ id, home: { id: place.id, key: peer, kind, name: place.name, online }, botId: bot.id, name: bot.name,
+        ...(bot.title ? { title: bot.title } : {}), ...(bot.color ? { color: bot.color } : {}), ...(bot.mascotBody ? { mascotBody: bot.mascotBody } : {}),
+        ...(bot.mascotFaceColor ? { mascotFaceColor: bot.mascotFaceColor } : {}), ...(bot.mascotBodyColor ? { mascotBodyColor: bot.mascotBodyColor } : {}), ...(bot.mascotMaterial ? { mascotMaterial: bot.mascotMaterial } : {}),
+        ...(bot.chief ? { chiefOfStaff: true } : {}), ...(bot.threadId ? { threadId: bot.threadId } : {}) })) });
+    }
 
     if (path === STATE_PATH) {
       if (!deps.local(auth)) { req.resume(); return json(res, 403, { error: "Only the app on this computer can turn the link to the Cloud on or off." }); }
@@ -103,19 +125,21 @@ export function createBotLinkRoutes(deps: BotLinkRouteDeps): RouteHandler {
       if (!("on" in body.data)) {
         // The word is one Cloud's: a link to another Cloud is not told it.
         if (body.data.cloud === "awake") await dialer.tellEnded(body.data.origin);
-        if (link.role() === "dialer" && link.dial()?.origin === body.data.origin) { if (body.data.cloud === "asleep") dialer.sleep(); else dialer.start(); }
+        if (link.role() === "dialer" && link.dial()?.origin === body.data.origin) { if (body.data.cloud === "asleep") dialer.sleep(body.data.heardAt); else dialer.start(); }
         return json(res, 200, state());
       }
       if (!body.data.on) {
-        if (link.role() === "dialer") link.turnOff(await dialer.stop({ bye: true }));
+        if (link.role() === "dialer") await endHere();
         return json(res, 200, link.status());
       }
       if (link.role() === "acceptor") return json(res, 409, { error: "This place already takes a computer's link." });
       if (!body.data.origin.startsWith("https://") && !loopbackHost(body.data.origin)) return json(res, 400, { error: "The Cloud's address must be https." });
-      if (link.role() === "dialer" && link.dial()?.origin !== body.data.origin) link.turnOff(await dialer.stop({ bye: true }));
+      if (link.role() === "dialer" && link.dial()?.origin !== body.data.origin) await endHere();
       link.turnOn({ self: { id: deps.environmentId, name: body.data.name }, origin: body.data.origin, token: body.data.token, peer: body.data.cloud, ...(body.data.account ? { account: body.data.account } : {}) });
       deps.turnedOn?.();
       dialer.start();
+      // That Cloud is awake (it just paired): an earlier link to it that ended while it could not be told is ended there now.
+      void dialer.tellEnded(body.data.origin);
       return json(res, 200, state());
     }
 
@@ -178,6 +202,9 @@ export function createBotLinkRoutes(deps: BotLinkRouteDeps): RouteHandler {
     const power = deps.power();
     if (power?.sleeping()) return answerAsleep(res, json);
     seen(peer);
+    // Each side says what its version reads; a computer on the first version says nothing and is sent only what that reads.
+    link.setLevel(peer, levelOf(req.headers[LEVEL_HEADER]));
+    if ((deps.level ?? PROTOCOL_LEVEL) > 1) res.setHeader(LEVEL_HEADER, String(deps.level ?? PROTOCOL_LEVEL));
     if (body.data.fresh) link.sessionStarted(peer);
     link.receive(peer, body.data.frames);
     const linked = () => auth.kind === "session" && link.peerOfSession(auth.session.id) === peer;

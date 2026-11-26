@@ -1,4 +1,4 @@
-import { createContext, use, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Children, createContext, use, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, Copy, Ellipsis, Reply, X } from "lucide-react";
 import { popoverClosesOnKey, usePopoverDismiss } from "@/hooks/use-popover-dismiss";
 import { cn } from "@/lib/cn";
@@ -21,6 +21,8 @@ export type MessageMenuItem = {
   disabled?: boolean;
   /** Offered only while the chat's turn is not running. */
   idleOnly?: boolean;
+  /** Greyed out while the chat's turn is running. */
+  disabledWhileBusy?: boolean;
 };
 
 /** Whether the chat's turn is running, apart from the row values every message reads: a turn starting or ending
@@ -30,6 +32,7 @@ export const ChatBusyContext = createContext(false);
 export const MESSAGE_ROW = "data-message-row";
 
 const INTERACTIVE = "a, button, input, textarea, select, summary, label, [role=button], [contenteditable=true]";
+const OWN_MENU_MEDIA = "img, video, audio";
 const LONG_PRESS_MS = 450;
 
 function focusVisible(target: EventTarget | null): boolean {
@@ -65,8 +68,8 @@ export function MessageActions({
   const [pointAt, setPointAt] = useState<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
   const offered = pointAt ? [...contextItems, ...items] : items;
   // use() may run conditionally: a closed menu has no reason to follow the turn.
-  const busy = menuOpen && offered.some((item) => item.idleOnly) ? use(ChatBusyContext) : false;
-  const menu = busy ? offered.filter((item) => !item.idleOnly) : offered;
+  const busy = menuOpen && offered.some((item) => item.idleOnly || item.disabledWhileBusy) ? use(ChatBusyContext) : false;
+  const menu = busy ? offered.filter((item) => !item.idleOnly).map((item) => (item.disabledWhileBusy ? { ...item, disabled: true } : item)) : offered;
   const [hovered, setHovered] = useState(false);
   const [keyboardFocus, setKeyboardFocus] = useState(false);
   const [tapped, setTapped] = useState(false);
@@ -75,6 +78,13 @@ export function MessageActions({
   const mirrored = side === "user";
   const streaming = use(StreamingReplyContext);
   const shown = !streaming && (forceOpen || menuOpen || hovered || keyboardFocus || tapped);
+  // The buttons mount on the row's first hover, focus, tap or right-click; until then the "more" button is the way in.
+  const [armed, setArmed] = useState(false);
+  if (!armed && (shown || forceOpen)) setArmed(true);
+  const drawn = armed || items.length === 0;
+  const armedRef = useRef(drawn);
+  armedRef.current = drawn;
+  const handOff = useRef(false);
   const canPointRef = useRef(false);
   canPointRef.current = !streaming && items.length + contextItems.length > 0;
 
@@ -85,7 +95,15 @@ export function MessageActions({
     let press: { x: number; y: number; at: number; timer: ReturnType<typeof setTimeout> } | null = null;
     const enter = (event: PointerEvent) => { if (event.pointerType !== "touch") setHovered(true); };
     const leave = (event: PointerEvent) => { if (event.pointerType !== "touch") setHovered(false); };
-    const focusIn = (event: FocusEvent) => setKeyboardFocus(focusVisible(event.target));
+    const focusIn = (event: FocusEvent) => {
+      if (!armedRef.current) {
+        // Tab from above lands on "more" before the buttons ahead of it exist: focus goes on to the first of them.
+        const from = event.relatedTarget;
+        handOff.current = event.target === moreRef.current && !(from instanceof Node && rootRef.current && rootRef.current.compareDocumentPosition(from) & Node.DOCUMENT_POSITION_FOLLOWING);
+        setArmed(true);
+      }
+      setKeyboardFocus(focusVisible(event.target));
+    };
     const focusOut = (event: FocusEvent) => {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) return;
       setKeyboardFocus(false);
@@ -119,7 +137,7 @@ export function MessageActions({
     const context = (event: MouseEvent) => {
       if (!canPointRef.current || (event as Partial<PointerEvent>).pointerType === "touch") return;
       const target = event.target;
-      if (!(target instanceof Element) || !target.closest("[data-chat-bubble]") || target.closest(INTERACTIVE)) return;
+      if (!(target instanceof Element) || !target.closest("[data-chat-bubble]") || target.closest(INTERACTIVE) || target.closest(OWN_MENU_MEDIA)) return;
       if (window.getSelection()?.toString().trim()) return;
       const box = rootRef.current?.getBoundingClientRect();
       if (!box) return;
@@ -149,6 +167,12 @@ export function MessageActions({
       row.removeEventListener("contextmenu", context);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (!drawn || !handOff.current) return;
+    handOff.current = false;
+    rootRef.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
+  }, [drawn]);
 
   usePopoverDismiss(tapped && !menuOpen, rowRef, () => setTapped(false));
   usePopoverDismiss(menuOpen, rootRef, () => {
@@ -209,7 +233,7 @@ export function MessageActions({
         (document.activeElement as HTMLElement | null)?.blur();
       }}
     >
-      {children}
+      {drawn ? children : Children.toArray(children).map((_, index) => <span key={index} aria-hidden="true" className="size-7 shrink-0" />)}
       {items.length > 0 && (
         <button
           ref={moreRef}
@@ -225,7 +249,7 @@ export function MessageActions({
           aria-controls={menuOpen ? menuId : undefined}
           className={cn(messageActionClass, menuOpen && "bg-ink/10 text-ink")}
         >
-          <Ellipsis {...ACTION_ICON} aria-hidden="true" />
+          {drawn && <Ellipsis {...ACTION_ICON} aria-hidden="true" />}
         </button>
       )}
       {menuOpen && (

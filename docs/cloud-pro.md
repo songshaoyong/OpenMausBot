@@ -632,8 +632,8 @@ The grant (`automaticGrant`) is the same for every Cloud of the person's own:
 - **Never the terminal**: no command runs on this computer for a Cloud, and a
   bot that asks is told not to run it another way.
 
-Nothing asks for a confirmation: each bot's own approval level (Ask first or
-Just do it) governs what it does with this computer, as with any tool. The move
+Nothing asks for a confirmation: each bot's own approval level (Ask for approval
+or Full access) governs what it does with this computer, as with any tool. The move
 to My Cloud lends each moved bot's own project folder with editing on top
 (`lendProjects`); while lending is paused, or before My Cloud is signed in, the
 move tries again later.
@@ -1110,6 +1110,46 @@ The app files are the last layers, so an image built from a later commit
 differs from the previous one only in those (a few MB) unless Chrome, an
 engine, Grok's pin, or the Node base image changed in between.
 
+**What a new home downloads before its bots can work: nothing.** Claude Code,
+Codex and Grok run from `/usr/local/bin`, agent-browser from its global npm
+install, and both browser drivers (agent-browser's launcher and OpenMausBot's
+own `engine: "chrome"`) run the Chrome the image names in
+`AGENT_BROWSER_EXECUTABLE_PATH` (`server/browser/chrome/resolve.ts`, "named"),
+so `tools/chrome/` stays empty on a Cloud. The data folder gains tools only for
+what someone uses later: an engine installed from Settings (`tools/npm`,
+`tools/standalone`), a Bitwarden vault (`tools/bitwarden`, 46 MB), a spreadsheet or
+database read by the Data tools (`duckdb-extensions/<duckdb version>`, 4 to
+15 MB each). None of these are in backups or moves.
+
+**Engine copies in the data folder.** The data folder's npm prefix
+(`tools/npm/bin`) goes ahead of `/usr/local/bin` on the engines' PATH, so a copy
+installed there runs even when the image carries a newer one, and the engine
+updater keeps it current. With `OMB_IMAGE_ENGINES=1` in a home's environment
+(passed to the server by `serverEnvironmentAllowed`; off by default, never on
+Windows, desktop unchanged), `server/image-engines.ts` changes that for a
+package both places hold:
+
+- the image's copy runs unless the data folder's is newer (a newer copy
+  someone installed from Settings, or one an update installed because the
+  image's copy is below what the driver needs, keeps running);
+- while the image's copies run, the updater downloads nothing for a
+  data-folder copy no newer than the image's, unless the image's copy is
+  below the engine's `minimum` or an exact
+  `target` in `server/engine-versions.ts`, or a CLI path saved on the engine
+  runs that copy (`configuredClis`);
+- PATH is one list, so when any shared package is newer in the data folder,
+  the data folder's bin stays first for all of them, as today;
+- a CLI path saved on the engine always wins, as before.
+
+Nothing is removed. A later cleanup may remove, on a home with the switch on:
+`tools/npm/lib/node_modules/@anthropic-ai/claude-code` and `@openai/codex`
+(and their `tools/npm/bin` links) when no newer than the image's, and
+`tools/npm-home/cache`; `tools/chrome/*`, which a Cloud never runs;
+`tools/agent-browser/<version>` when the image carries the same version;
+`duckdb-extensions/<older duckdb versions>`; and
+`cache/node-compile/v<older node>-*` (a home runs `index.js` with
+`NODE_COMPILE_CACHE`, which keeps every Node version's entries).
+
 At boot the launcher, running as root, hands the volume's mount point to the
 `maus` user, locks the volume for as long as it runs (`flock` on the volume's
 root: a second home on a volume a live home holds refuses to start, which
@@ -1122,9 +1162,11 @@ boot id while its pids start again from 1, so the lease names its pid
 namespace and its process's start time too), and runs two children as `maus`: the
 server on `127.0.0.1:8799` (webhooks on `127.0.0.1:8800`) and Caddy on
 `:8080`. It stays a small root supervisor: if either child exits, both stop
-and Fly restarts the machine. The one exception: after a restore commits
-(a backup restored in Settings), the server exits with code 75
-(`server/restart.ts`) and the launcher starts only the server again.
+and Fly restarts the machine. Two exceptions (`server/restart.ts`): after a restore
+commits (a backup restored in Settings), the server exits with code 75 and the
+launcher starts only the server again; after a crash (exit 70 from
+`server/crash-guard.ts`, or killed by the system, as out of memory) it starts the
+server again after 1, 2, 5, 15 and 30 s, then gives up so Fly restarts the machine.
 
 The machine's secrets (`OMB_CLOUD_BOOTSTRAP_SECRET` and the relay tokens
 `OMB_CLOUD_BOAT_TOKEN`, `OMB_CLOUD_VOICE_TOKEN`, `OMB_CLOUD_DECIDER_TOKEN`, `OMB_CLOUD_X_TOKEN`,
@@ -1186,14 +1228,31 @@ provider outage. So on a Cloud home (`server/engine-memory.ts`):
   the five starts paused and never pushes out one the person was using: `POST /api/bots`
   answers it with `"paused": true`, and the app opens **Keep these awake** with the new bot
   chosen in place of the least recently active one that isn't working (`POST /api/starter/awake`).
-  A Chief's `create_bot` answers with a `paused` line for the person. A restore or a move into a
-  Cloud that never wrote a set down wakes the most recently active. A paused bot's turn answers
-  `409` `{"code":"bot_paused"}`, a hand-off to it is refused, a routine or webhook run for it
-  fails at once with that line (no conversation is made, and it never wakes a sleeping Cloud),
-  and its daily memory upkeep waits. Every bot wakes as soon as the Admin tells the home its new
-  plan, with no restart. An older server refuses a sixth bot with `409` `{"code":"bot_limit"}`;
-  the app still shows its upgrade popup for that. Every plan holds at most 100 bots
-  (`MAX_WORKSPACE_BOTS`), counted on `POST /api/bots`, a package import and a Chief's setup.
+  A Chief's `create_bot` answers with a `paused` line for the person. Places filled without a
+  choice (a restore or a move into a Cloud that never wrote a set down, or a chosen bot deleted) go
+  to the most recently active, except that once the routines are loaded a bot with an enabled
+  routine comes first. A paused bot's turn answers `409` `{"code":"bot_paused"}`, a hand-off to it
+  is refused, and its daily memory upkeep waits. Every bot wakes as soon as the Admin tells the
+  home its new plan, with no restart. An older server refuses a sixth bot with `409`
+  `{"code":"bot_limit"}`; the app still shows its upgrade popup for that. Every plan holds at most
+  100 bots (`MAX_WORKSPACE_BOTS`), counted on `POST /api/bots`, a package import and a Chief's
+  setup.
+- **A routine gets priority for its bot.** The limit never fails a routine, webhook, app-event or
+  Run now run (`server/host/starter-routine-wake.ts`). When a routine (or a trigger that runs the
+  bot; a webhook that only posts doesn't count) is made or switched on, or runs, for a bot only the
+  limit paused, that bot takes the place of the awake bot that has no enabled routine, has nothing
+  in flight and waits on nobody (no turn, queued message, hand-off, question card, check-back or
+  wait), wasn't paused by the person, and has been idle longest, at least an hour
+  (`STARTER_SWAP_MIN_IDLE_MS`). The swap is written down like a choice, so **Keep these awake**
+  shows it and the person can swap back, and one quiet line in the woken bot's chat says what woke
+  it and which bot was paused for it. A routine bot the person left paused in their own last
+  choice stays paused, so does one no awake bot can make room for, and a run of a switched-off
+  routine swaps nothing: in each case the run still goes ahead in its own conversation (the rest of
+  the bot stays paused, and a person's new message in that conversation meets the paused line
+  too), and the bot's chat says so once. Run now of a switched-off routine, or a person's test of a
+  switched-off trigger, for a bot the limit paused is refused with the paused line. Such a routine's next run counts as due,
+  so a sleeping home is woken for it. The two turns at once below still apply: the run waits for a
+  place like any turn. A bot the person paused (`paused-bots.json`) is never woken by a routine.
 - **How much a Starter Cloud runs at once.** Two turns Cloud-wide, and four hand-offs waiting
   beyond them; past that a new hand-off is refused (`server/host/starter-caps.ts`).
 - **Who goes first.** The gate only changes the order, never how much it lets in. A
@@ -1239,13 +1298,18 @@ provider outage. So on a Cloud home (`server/engine-memory.ts`):
   server is -800 and Caddy -900, so the health check is the last to go, and
   the root supervisor that restarts them is -1000, never picked. When memory
   runs out the kernel takes a bot's process, never the workspace.
-- **OpenCode reaches OpenMausBot's own tools over HTTP.** The agents,
-  browser, computer, Data, Email and phone servers are endpoints of this server
-  (`/api/internal/mcp-http/<name>`, `server/routes/own-mcp-http.ts`) with the
-  turn's capability in the Authorization header, instead of a Node proxy
-  process each (about 20–30 MB PSS apiece) in every OpenCode session. A server
-  behind a tool selection keeps its stdio gate; the person's own servers are
-  unchanged.
+- **OpenCode, Cursor, omp and Grok reach OpenMausBot's own tools over HTTP.**
+  The agents, browser, computer, Data, Email and phone servers are endpoints of
+  this server (`/api/internal/mcp-http/<name>`, `server/routes/own-mcp-http.ts`)
+  with the turn's capability in the Authorization header, instead of a Node
+  proxy process each (about 20–30 MB PSS and 7 threads apiece, all counted
+  against the pids limit) in every session. Grok gets this in each session whose
+  `initialize` answer says `mcpCapabilities.http`; otherwise it keeps the stdio
+  proxies. In the bot box the engine reaches the endpoint the way its proxies
+  did, through the box's bridge to the harness gate. A server behind a tool
+  selection keeps its stdio gate; the person's own servers and the connected
+  apps' connector are unchanged. `OMB_OWN_MCP_HTTP=0` puts every engine back on
+  the stdio proxies.
 - **The reason is said, in one line.** A turn whose engine was stopped for
   memory, by the home or by the kernel (a SIGKILL while `/proc/vmstat`'s
   `oom_kill` rose), ends with "Ran out of room, so I closed the browser to
@@ -1717,7 +1781,7 @@ wait for the next read, `truncated: true`):
   "cursor": "1790000000000.12", "truncated": false,
   "incidents": [{ "kind": "turn", "code": "rpc_error", "engine": "codex", "count": 3, "firstAt": 1790000100000, "lastAt": 1790000290000,
     "botId": "<uuid>", "threadId": "<uuid>", "seq": 12 }],
-  "turns": { "started15m": 6, "failed15m": 3, "started24h": 40, "failed24h": 5 },
+  "turns": { "started15m": 6, "failed15m": 3, "started24h": 40, "failed24h": 5, "boot": 52 },
   "routines": [{ "routineId": "<uuid>", "status": "failed", "at": 1790000200000, "consecutiveFailures": 2 }],
   "schedule": { "v": 1, "seq": 4182, "unreadable": false, "nextDueAt": 1790086400000, "oldestUnconfirmed": null,
     "lastConfirmed": { "dueAt": 1790000000000, "startedAt": 1790000001250, "state": "ran" },
@@ -1731,9 +1795,10 @@ wait for the next read, `truncated: true`):
   "firstHour": { "startedAt": 1790000000000, "apps": ["gmail"], "look": "delivered",
     "ms": { "seen": 41000, "firstMessage": 52000, "offered": 61000, "firstApp": 118000, "firstLook": 171000, "briefOn": 172000, "phoneOffered": 172000 } },
   "value": { "sorted": 40, "drafted": 6, "prepped": 4, "routines": 0, "minutes": 110 },
-  "room": { "waits": 3, "waitMs": 360000, "stopped": 1, "killed": 1, "stallMinutes": 2 },
+  "room": { "waits": 3, "waitMs": 360000, "stopped": 1, "killed": 1, "stallMinutes": 2,
+    "boot": { "waits": 5, "stopped": 1, "killed": 1, "stallMinutes": 4 } },
   "speed": { "windowS": 300, "steal": 1.2, "psi": { "cpu": 3.4, "memory": 0, "io": 0.8 }, "bootMs": 5400, "wakeMs": null,
-    "turnStarts": [12, 3, 1, 0, 0, 0] }
+    "turnStarts": [12, 3, 1, 0, 0, 0], "loop": { "n": 2, "worstMs": 1800 } }
 }
 ```
 
@@ -1755,8 +1820,13 @@ Fly's own start before that, and a resume from a suspend, are not in it.
 `turnStarts` counts people's messages since boot by how long each waited
 from being stored to its engine's turn starting: up to 0.5, 1, 2, 5 and 15
 seconds, and longer. A message sent while its thread runs a turn, a bot's, a
-routine's and a steer are not counted. Older homes don't send `speed`: the
-Admin reads that as unknown, never as zero.
+routine's and a steer are not counted. `loop` is the event loop's stalls
+(`server/perf/loop-stalls.ts`, read from the recorder's own minutes, nothing
+measured for it): `n`, delays of a second or more since this process started
+(finished minutes; it never falls), and `worstMs`, the longest delay in the
+last 15 minutes and the minute under way, so one read the Admin missed still
+shows; a sleep or pause is not a stall; `null` where no recorder runs. Older
+homes don't send `speed`: the Admin reads that as unknown, never as zero.
 
 **`room`** is the last day's memory pressure where the home watches it (a Cloud
 home on Linux, `server/engine-memory.ts`), else `null`: how many tasks had to
@@ -1764,7 +1834,9 @@ wait for memory and how long they waited in all (a wait still going counts its
 time so far), how many turns were stopped for memory (`stopped`), how many
 processes the kernel stopped (`killed`), and in how many minutes the machine
 stalled on memory. Counted in memory since boot, so a restart starts them
-again.
+again. `boot` is the same counts (no wait time) since this process started:
+they never fall, so the Admin keeps each hour's increase (its Cloud history),
+which the rolling day can't give.
 
 **`firstHour`** is there on a personal Cloud that began with its first hour
 (`server/host/first-hour.ts`), else `null`: `startedAt` is the first boot,
@@ -1790,14 +1862,23 @@ thread ids, and a sequence number the cursor follows; at most 200 buckets,
 the one quiet longest dropped first. The code is the first that applies: the
 place's state (`shared/place-view.ts`); a cause the server words itself
 (`stalled`, `restart`, `could_not_start`, `incident_undelivered`,
-`approval_undelivered`, `event_log`); the trial credit's refusal
+`approval_undelivered`, `event_log`); an engine that did not start, by why,
+instead of the provider-looking code its words would get (`server_error`,
+`rpc_error`, `spawn_error`): `start_overloaded` (the Cloud too busy to start
+it: the plain line `chat.notice.cloudBusyStart` or `cloudOutOfCpu`, or no room
+for another process), `start_not_installed` (its CLI missing), `start_provider`
+(the engine's or its provider's own transient refusal of the start, noted by
+the ACP start for its thread, `server/engine-start-failures.ts`); a sign-in
+refused at the start keeps `auth`/`auth_required`, which the Admin's
+engine-auth alert reads; the trial credit's refusal
 (`trial_used_up`, …); the turn's stop reason when it says more than "failed"
 (`auth_required`, `shutdown_timeout`, `provider_safety`, `update_required`,
 `spawn_error`, `quota`, `tool_error`: a tool call that failed or wasn't allowed); the cause's class (`server/drivers/retry.ts`:
 `auth`, `quota`, `rate_limited`, …); the generic stop reason (`rpc_error`);
 else `unknown`. A turn that ends in `shutdown_timeout`, `auth_required`,
 `update_required`, `spawn_error` or `rpc_error` without a failed row of its own
-counts once too. `turns` counts turns started and failed rows per minute;
+counts once too. `turns` counts turns started and failed rows per minute,
+and `boot` the turns started since boot (it never falls);
 `routines` gives, for each routine that is on and each outside trigger, its last
 outcome and its failures in a row, counted from the saved run rows at every read,
 so a restart does not start the count again. A row that only counts occurrences
@@ -1834,6 +1915,70 @@ also runs at start-up and is found more than 12 hours late runs its start-up
 run in place of the missed occurrence, which gets no record; and occurrences
 that fall while a routine is held (its owner left) are not recorded, because a
 held routine is off.
+
+**`storage`** says what fills the volume (`server/perf/disk-usage.ts`), from
+the last full pass of a slow walk over HOME (the volume) and the data folder
+inside it. It sits beside `perf` with its own budget of 4 KB, and the field is
+left out where nothing is measured or its read fails; the health read never
+starts a walk.
+
+```json
+"storage": { "v": 1, "at": 1790000000000, "ageS": 300, "tookS": 1500, "running": false, "progress": null,
+  "volume": { "totalBytes": 84000000000, "freeBytes": 3400000000, "usedBytes": 80600000000 },
+  "walkedBytes": 80100000000, "unwalkedBytes": 500000000,
+  "categories": [{ "name": "engine_state", "class": "precious", "bytes": 41000000000, "files": 210000 },
+    { "name": "bot_files", "class": "work", "bytes": 22000000000, "files": 90000 }],
+  "bots": [{ "id": "<uuid>", "bytes": 20000000000, "files": 80000 }], "botsRest": { "bytes": 2000000000, "files": 10000, "count": 3 },
+  "other": { "named": [{ "name": "lost+found", "bytes": 16384, "files": 0 }], "unlisted": { "bytes": 1200000, "files": 40, "entries": 2 } },
+  "skipped": { "unreadable": 0, "otherDevice": 0, "tooDeep": 0, "vanished": 12, "links": 340 },
+  "linksCapped": false, "linksUncheckedBytes": 0, "resumes": 1, "failed": false }
+```
+
+- **Categories** are fixed names, each with its class (`server/perf/disk-categories.ts`):
+  `precious` (only this home holds it: `conversations`, `settings`,
+  `engine_state`, `browser_profiles`), `work` (what bots and people made or
+  may still read: `bot_files`, `attachments`, `synced`, `backups`, `trash`,
+  `logs`, `other`) or `rebuildable` (made again when missing:
+  `browser_cache`, `browser_engines`, `engine_clis`, `packages`, `caches`,
+  `temp`). Only a name the code lists is ever rebuildable; anything unknown
+  is `other`. A `node_modules` folder inside a bot's or person's folder
+  counts as `packages`. Bytes are allocated blocks, so a sparse file counts
+  what it takes on disk.
+- **Hard links** count once, checked by inode for up to 500,000 linked
+  files. Past that, `linksCapped` is true and `linksUncheckedBytes` is the
+  most that may be counted twice.
+- **`bots`** are the ten bots with the most bytes in `workspaces/`,
+  `task-workspaces/` and `bots/`, by id, and only bots the store knows. Every
+  other bot folder is summed in `botsRest`.
+- **`other`** names a first-level folder only from a fixed list of names our
+  code or the filesystem makes (`lost+found` and a few shell history files).
+  Anything else is summed in `unlisted` with no name, so a person's folder
+  name never leaves the home.
+- **`unwalkedBytes`** is the space the volume reports used minus what the
+  walk counted. It is positive for what the walk cannot see, such as deleted
+  files a process still holds open and filesystem metadata. It is negative
+  when the walk counted too much, which only happens past the hard-link check
+  or in a pass resumed after a restart (`resumes`).
+- **The cost.** A pass reads names and sizes only (lstat): it never opens a
+  file, never follows a link and never leaves the volume's filesystem. Each
+  tick, every 2 seconds, reads at most 2,000 entries or 25 ms. No tick starts
+  while a turn runs, and a tick stops at its next entry once one starts.
+  `progress.waitedS` is how long the current pass has waited for turns, so a
+  home that is never idle shows as one whose pass does not finish. The first
+  pass starts 2 minutes after boot, and the next one 6 hours after each pass
+  ends. The last pass is kept in the data folder's
+  `cache/storage-report.json`, and the pass under way in
+  `cache/storage-progress.json`, saved at most once a minute between two
+  folders of the top four levels. Backups leave both out. Neither is read
+  back when it is over 1 MB, and every count read back is checked to be
+  10 PB at most. A home that sleeps
+  by stopping keeps its report and picks the pass up where it left off.
+  Node has no per-call I/O priority, and lowering the server's own priority
+  would slow everything else, so the budget is the only throttle.
+
+The owner's own session can read the same report at
+`GET /api/diagnostics/storage` (admin scope; `{ "storage": null }` on
+anything but a Cloud home).
 
 **What it never carries:** a failure's words, a bot's name, a thread's title,
 a prompt, a URL, an email address, a token, or an engine's account
@@ -2257,7 +2402,7 @@ calls `POST /api/cloud/desktop/pairing` (same device token) and expects
 `{"cloudContractVersion":1,"origin":…,"code":…,"expiresAt":…}` for the same
 origin, with `expiresAt` at most ten minutes away. It then adds or selects the
 **My Cloud** server entry and opens `<origin>/pair#code=<code>`, the same
-pairing-link flow as Connect to a server. The code stays in main-process
+pairing-link flow as Connect to another computer. The code stays in main-process
 memory for that one navigation: never on disk, never in a renderer. A
 malformed session summary or grant is treated as none.
 
@@ -2456,7 +2601,9 @@ actions, the tip, the dialog's views and checkouts opened, with no content.
 
 Once the Cloud is ready (and the Admin's `moves` switch lets this account
 move), the desktop app moves everything from this computer to it, once, by
-itself, and from then on opens the Cloud as its only home
+itself when this computer has one bot (with more, it first asks which go:
+**Move everything**, or a choice that leaves the rest working here, as a bot's
+own **Move to My Cloud** does), and after a whole move opens the Cloud as its only home
 (`electron/one-home.mjs`, `electron/home-window.mjs`). The move carries each
 thing by id over one owner session (`electron/cloud-send.mjs`), checks that it
 all arrived, and freezes this computer's copy so nothing runs in two places
@@ -2465,6 +2612,18 @@ all arrived, and freezes this computer's copy so nothing runs in two places
 (`server/cloud-move-http.ts`); a backup file still restores from Settings →
 Import & export. [docs/verification/cloud-send.md](verification/cloud-send.md) has the
 tests.
+
+A bot lives in one place. Before a chosen bot moves, the confirm (and the
+chooser, for the bots ticked) says what changes for it, read from its own setup
+(`server/move-changes.ts`, `shared/move-changes.ts`): teammates it handed work to
+that stay here, its working folder, a model engine on this computer or its
+network (the Cloud can't reach one; it gets the Cloud's model), command MCP
+servers that need this computer and commands, and skills that read places no
+lent folder reaches, such as `~/.claude` (`electron/personal-secrets.mjs`).
+A working folder not yet lent with editing (one outside the home folder, say) gets
+a switch, on by default as moves always lent it; turned off, the move doesn't lend
+it. Only when the person turns it on and confirms in main's own dialog may their
+Clouds run commands here; a grant that fails is said on the move's line.
 
 The move's journal names the Cloud by its address and, once the session lists
 it, by its id (the person's own Cloud in `clouds[]` at My Cloud's address).
